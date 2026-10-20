@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f4f6f8">
+    <title>Drone Grid</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f4f6f8;
+        color: #1f2937;
+        font-synthesis: none;
+        text-rendering: optimizeLegibility;
+        --muted: #667085;
+        --line: #e4e7ec;
+        --blue: #2563eb;
+        --blue-light: #eff6ff;
+        --blocked: #b45309;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        min-width: 320px;
+        min-height: 100vh;
+        margin: 0;
+        background: #f4f6f8;
+      }
+
+      button { font: inherit; }
+
+      .app {
+        width: min(1080px, calc(100% - 40px));
+        margin: 0 auto;
+        padding: 32px 0 40px;
+      }
+
+      .topbar, .brand, .eyebrow, .card-heading, .status, .legend, .voice-button, .reset-button {
+        display: flex;
+        align-items: center;
+      }
+
+      .topbar { justify-content: space-between; margin-bottom: 38px; }
+      .brand { gap: 11px; font-size: 14px; font-weight: 700; letter-spacing: 0.035em; }
+      .brand-mark {
+        display: grid;
+        width: 35px;
+        height: 35px;
+        place-items: center;
+        border: 1px solid #d0d5dd;
+        border-radius: 9px;
+        color: var(--blue);
+        background: #fff;
+      }
+      .top-label {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+      }
+
+      .intro { margin-bottom: 26px; }
+      .eyebrow {
+        gap: 9px;
+        margin-bottom: 12px;
+        color: var(--blue);
+        font-size: 11px;
+        font-weight: 750;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      .eyebrow::before { width: 17px; height: 1px; background: var(--blue); content: ""; }
+      h1 { margin: 0; font-size: clamp(30px, 5vw, 46px); letter-spacing: -0.035em; line-height: 1.1; }
+      .intro p { margin: 12px 0 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: minmax(0, 1.48fr) minmax(285px, 0.82fr);
+        gap: 18px;
+        align-items: stretch;
+      }
+
+      .card {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fff;
+        box-shadow: 0 1px 3px rgba(16, 24, 40, 0.06);
+      }
+
+      .card-heading {
+        min-height: 67px;
+        justify-content: space-between;
+        padding: 0 22px;
+        border-bottom: 1px solid var(--line);
+      }
+      .card-heading strong { font-size: 13px; font-weight: 700; }
+      .board-size {
+        padding: 6px 9px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+      }
+
+      .board-wrap { padding: 20px 22px 16px; }
+      .coordinates {
+        display: grid;
+        grid-template-columns: 18px repeat(5, 1fr);
+        gap: 8px;
+        padding: 0 0 8px;
+        color: #98a2b3;
+        font-size: 10px;
+        font-weight: 700;
+        text-align: center;
+      }
+      .board-row { display: grid; grid-template-columns: 18px 1fr; gap: 8px; align-items: center; }
+      .board-row + .board-row { margin-top: 8px; }
+      .row-label { color: #98a2b3; font-size: 10px; font-weight: 700; text-align: center; }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 8px;
+      }
+      .cell {
+        position: relative;
+        display: grid;
+        aspect-ratio: 1.24 / 1;
+        min-height: 55px;
+        place-items: center;
+        overflow: hidden;
+        border: 1px solid #eaecf0;
+        border-radius: 8px;
+        background: #f9fafb;
+        transition: border-color 150ms ease, background-color 150ms ease;
+      }
+      .cell.drone-cell {
+        border-color: #93b4ff;
+        background-color: var(--blue-light);
+      }
+      .cell.obstacle-cell {
+        border-color: #f0d7b8;
+        background-color: #fffaf3;
+      }
+      .drone {
+        width: 43px;
+        height: 43px;
+        color: var(--blue);
+      }
+      .obstacle {
+        display: grid;
+        width: 34px;
+        height: 34px;
+        place-items: center;
+        border: 1px solid #f0d7b8;
+        border-radius: 8px;
+        background: #fff4e5;
+        color: var(--blocked);
+        font-size: 18px;
+      }
+      .legend { gap: 20px; padding: 15px 22px 19px; color: var(--muted); font-size: 11px; }
+      .legend-item { display: inline-flex; align-items: center; gap: 7px; }
+      .legend-swatch { width: 9px; height: 9px; border-radius: 3px; background: var(--blue); }
+      .legend-swatch.blocked { background: var(--blocked); }
+      .board-footer {
+        display: flex;
+        justify-content: space-between;
+        padding: 14px 22px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .board-footer strong { color: #344054; font-weight: 650; }
+
+      .controls { display: flex; flex-direction: column; }
+      .control-section { padding: 22px; }
+      .section-label {
+        margin: 0 0 15px;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 750;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .voice-button, .reset-button {
+        width: 100%;
+        min-height: 49px;
+        justify-content: center;
+        gap: 10px;
+        border: 1px solid transparent;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 720;
+        transition: transform 140ms ease, background-color 140ms ease, border-color 140ms ease;
+      }
+      .voice-button {
+        color: #fff;
+        background: var(--blue);
+      }
+      .voice-button:hover { background: #1d4ed8; }
+      .voice-button[aria-pressed="true"] {
+        color: #1d4ed8;
+        border-color: #b2ccff;
+        background: var(--blue-light);
+        box-shadow: none;
+      }
+      .voice-button:focus-visible, .reset-button:focus-visible, .arrow:focus-visible {
+        outline: 2px solid var(--blue);
+        outline-offset: 3px;
+      }
+      .mic-icon { width: 17px; height: 17px; }
+      .status {
+        min-height: 38px;
+        gap: 9px;
+        margin-top: 13px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      .status-dot {
+        width: 7px;
+        height: 7px;
+        flex: 0 0 7px;
+        border-radius: 50%;
+        background: #98a2b3;
+      }
+      .status[data-state="listening"] .status-dot { background: #16a34a; }
+      .status[data-state="error"] .status-dot { background: #dc2626; }
+      .divider { height: 1px; background: var(--line); }
+      .dpad { display: grid; grid-template-columns: repeat(3, 42px); grid-template-rows: repeat(2, 40px); gap: 6px; justify-content: center; }
+      .arrow {
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: #f9fafb;
+        color: #344054;
+        cursor: pointer;
+        font-size: 17px;
+        transition: border-color 140ms ease, background-color 140ms ease;
+      }
+      .arrow:hover { border-color: #93b4ff; background: var(--blue-light); }
+      .arrow[data-direction="up"] { grid-column: 2; grid-row: 1; }
+      .arrow[data-direction="left"] { grid-column: 1; grid-row: 2; }
+      .arrow[data-direction="down"] { grid-column: 2; grid-row: 2; }
+      .arrow[data-direction="right"] { grid-column: 3; grid-row: 2; }
+      .reset-button {
+        min-height: 41px;
+        margin-top: 15px;
+        border-color: var(--line);
+        color: #475467;
+        background: #fff;
+        font-size: 11px;
+      }
+      .reset-button:hover { border-color: #b2ccff; background: var(--blue-light); }
+      .command-tip {
+        margin: auto 22px 22px;
+        padding: 13px 14px;
+        border: 1px solid #eaecf0;
+        border-radius: 9px;
+        background: #f9fafb;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.55;
+      }
+      .command-tip strong { color: #344054; font-weight: 650; }
+
+      @media (max-width: 760px) {
+        .app { width: min(560px, calc(100% - 28px)); padding-top: 22px; }
+        .topbar { margin-bottom: 29px; }
+        .workspace { grid-template-columns: 1fr; }
+        .control-section { padding: 19px 22px; }
+        .controls { min-height: auto; }
+        .command-tip { margin-top: 0; }
+      }
+      @media (max-width: 410px) {
+        .board-wrap { padding-right: 13px; padding-left: 13px; }
+        .grid { gap: 5px; }
+        .board-row + .board-row { margin-top: 5px; }
+        .coordinates { gap: 5px; }
+        .cell { min-height: 46px; border-radius: 7px; }
+        .drone { width: 36px; height: 36px; }
+        .legend { gap: 13px; padding-right: 15px; padding-left: 15px; }
+        .board-footer { padding-right: 15px; padding-left: 15px; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+      }
+
+      :root {
+        color-scheme: light;
+        background: #fff;
+        color: #202124;
+        --muted: #6b7280;
+        --line: #e5e7eb;
+        --blue: #2563eb;
+        --blue-light: #f3f6fc;
+        --blocked: #a16207;
+      }
+      body { background: #fff; }
+      .app { width: min(520px, calc(100% - 32px)); padding: 24px 0; }
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      .workspace { display: grid; grid-template-columns: 1fr; gap: 12px; }
+      .card { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+      .board-wrap { padding: 0; }
+      .coordinates { grid-template-columns: 20px repeat(5, 1fr); padding-bottom: 5px; }
+      .board-row { grid-template-columns: 20px 1fr; gap: 5px; }
+      .board-row + .board-row { margin-top: 5px; }
+      .grid { gap: 5px; }
+      .cell { aspect-ratio: 1 / 1; min-height: 0; border: 1px solid #e5e7eb; border-radius: 0; background: #fff; transition: background-color 100ms ease; }
+      .cell.drone-cell { border-color: #202124; background: #f3f4f6; }
+      .cell.obstacle-cell { border-color: #202124; background: #202124; }
+      .drone { width: 42px; height: 42px; color: #202124; }
+      .obstacle { width: 12px; height: 12px; border: 0; border-radius: 0; background: #202124; color: transparent; font-size: 0; }
+      .board-footer { padding: 8px 20px 0; border: 0; font-variant-numeric: tabular-nums; }
+      .board-footer span:first-child::before { content: "⌖ "; color: var(--muted); }
+      .board-footer span:last-child::before { content: "↗ "; color: var(--muted); }
+      .controls { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 12px; }
+      .control-section { display: flex; align-items: center; gap: 10px; padding: 0; }
+      .voice-button { width: 42px; min-height: 42px; flex: 0 0 42px; padding: 0; border: 1px solid var(--line); border-radius: 0; color: #fff; background: #202124; box-shadow: none; }
+      .voice-button:hover { background: #34363a; }
+      .voice-button[aria-pressed="true"] { border-color: #202124; color: #202124; background: #fff; }
+      .mic-icon { width: 18px; height: 18px; }
+      .voice-button:focus-visible, .reset-button:focus-visible, .arrow:focus-visible { outline: 2px solid #202124; outline-offset: 2px; }
+      .status { min-height: 0; gap: 7px; margin: 0; font-size: 12px; }
+      .status-dot { width: 6px; height: 6px; flex-basis: 6px; }
+      .status[data-state="listening"] .status-dot { background: #16803c; box-shadow: none; }
+      .status[data-state="error"] .status-dot { background: #b42318; }
+      .control-section:last-child { display: grid; grid-template-columns: 1fr 32px; gap: 6px; justify-items: center; }
+      .dpad { grid-row: span 2; grid-template-columns: repeat(3, 32px); grid-template-rows: repeat(2, 32px); gap: 3px; }
+      .arrow { border-radius: 0; background: #fff; color: #202124; }
+      .arrow:hover { border-color: #9ca3af; background: #f9fafb; }
+      .reset-button { width: 32px; min-height: 32px; margin: 0; padding: 6px; border: 1px solid var(--line); border-radius: 0; color: #202124; background: #fff; }
+      .reset-button svg { display: block; width: 18px; height: 18px; }
+      .reset-button:hover { border-color: #9ca3af; background: #f9fafb; }
+      @media (max-width: 410px) {
+        .controls { grid-template-columns: 1fr; justify-items: center; }
+        .control-section { width: 100%; justify-content: center; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <div class="workspace">
+        <section class="card" aria-labelledby="board-title">
+          <h1 class="visually-hidden" id="board-title">Navigation grid</h1>
+          <div class="board-wrap">
+            <div class="coordinates" aria-hidden="true">
+              <span></span><span>A</span><span>B</span><span>C</span><span>D</span><span>E</span>
+            </div>
+            <div id="board" role="grid" aria-label="Drone navigation grid, 5 rows by 5 columns"></div>
+          </div>
+          <div class="board-footer">
+            <span id="position" aria-label="Position C3">C3</span>
+            <span id="move-count" aria-label="Moves 0">0</span>
+          </div>
+        </section>
+
+        <section class="controls" aria-label="Flight controls">
+          <div class="control-section">
+            <button class="voice-button" id="listen-button" type="button" aria-label="Start listening" title="Start listening" aria-pressed="false">
+              <svg class="mic-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="9" y="3" width="6" height="12" rx="3" stroke="currentColor" stroke-width="1.8"></rect>
+                <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3m-4 0h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+              </svg>
+              <span class="visually-hidden" id="listen-label">Start listening</span>
+            </button>
+            <div class="status" id="status" data-state="idle" role="status" aria-live="polite">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span id="status-message">Off</span>
+            </div>
+          </div>
+          <div class="control-section">
+            <div class="dpad" aria-label="Move the drone">
+              <button class="arrow" type="button" data-direction="up" aria-label="Move up">↑</button>
+              <button class="arrow" type="button" data-direction="left" aria-label="Move left">←</button>
+              <button class="arrow" type="button" data-direction="down" aria-label="Move down">↓</button>
+              <button class="arrow" type="button" data-direction="right" aria-label="Move right">→</button>
+            </div>
+            <button class="reset-button" id="reset-button" type="button" aria-label="Regenerate grid" title="Regenerate grid">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 7v5h-5M4.9 9a7.5 7.5 0 0 1 12.7-2.1L20 12M4 17v-5h5m10.1 3a7.5 7.5 0 0 1-12.7 2.1L4 12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="visually-hidden">Regenerate grid</span>
+            </button>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      (() => {
+        const SIZE = 5;
+        const OBSTACLE_COUNT = 5;
+        const board = document.querySelector("#board");
+        const positionLabel = document.querySelector("#position");
+        const moveCountLabel = document.querySelector("#move-count");
+        const status = document.querySelector("#status");
+        const statusMessage = document.querySelector("#status-message");
+        const listenButton = document.querySelector("#listen-button");
+        const listenLabel = document.querySelector("#listen-label");
+
+        let drone = { row: 2, col: 2 };
+        let obstacles = new Set();
+        let moveCount = 0;
+        let recognition = null;
+        let listening = false;
+        let recognitionActive = false;
+        let restartTimer = null;
+        let stableTimer = null;
+        let restartDelay = 300;
+        let lastRecognitionError = null;
+
+        function key(row, col) {
+          return `${row},${col}`;
+        }
+
+        function setStatus(message, state = "idle") {
+          statusMessage.textContent = message;
+          status.dataset.state = state;
+        }
+
+        function renderBoard() {
+          board.replaceChildren();
+          for (let row = 0; row < SIZE; row += 1) {
+            const rowElement = document.createElement("div");
+            rowElement.className = "board-row";
+            rowElement.setAttribute("role", "row");
+
+            const rowLabel = document.createElement("span");
+            rowLabel.className = "row-label";
+            rowLabel.setAttribute("aria-hidden", "true");
+            rowLabel.textContent = String(row + 1);
+            rowElement.append(rowLabel);
+
+            const gridRow = document.createElement("div");
+            gridRow.className = "grid";
+            for (let col = 0; col < SIZE; col += 1) {
+              const cell = document.createElement("div");
+              cell.className = "cell";
+              cell.setAttribute("role", "gridcell");
+              cell.setAttribute("aria-label", `Row ${row + 1}, column ${String.fromCharCode(65 + col)}`);
+
+              if (drone.row === row && drone.col === col) {
+                cell.classList.add("drone-cell");
+                cell.setAttribute("aria-label", `Drone at row ${row + 1}, column ${String.fromCharCode(65 + col)}`);
+                cell.innerHTML = '<svg class="drone" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M24 16.5v15M16.5 24h15" stroke="#2563eb" stroke-width="3" stroke-linecap="round"/><path d="M20 20l-5-5m13 13 5 5m0-18-5 5m-8 8-5 5" stroke="#475467" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="5" fill="#fff" stroke="#2563eb" stroke-width="2"/><circle cx="36" cy="12" r="5" fill="#fff" stroke="#2563eb" stroke-width="2"/><circle cx="12" cy="36" r="5" fill="#fff" stroke="#2563eb" stroke-width="2"/><circle cx="36" cy="36" r="5" fill="#fff" stroke="#2563eb" stroke-width="2"/><circle cx="24" cy="24" r="5.5" fill="#2563eb"/><circle cx="24" cy="24" r="2" fill="#fff"/></svg>';
+              } else if (obstacles.has(key(row, col))) {
+                cell.classList.add("obstacle-cell");
+                cell.setAttribute("aria-label", `Obstacle at row ${row + 1}, column ${String.fromCharCode(65 + col)}`);
+                cell.innerHTML = '<span class="obstacle" aria-hidden="true">✳</span>';
+              }
+              gridRow.append(cell);
+            }
+            rowElement.append(gridRow);
+            board.append(rowElement);
+          }
+
+          positionLabel.textContent = `${String.fromCharCode(65 + drone.col)}${drone.row + 1}`;
+          moveCountLabel.textContent = String(moveCount);
+          positionLabel.setAttribute("aria-label", `Position ${positionLabel.textContent}`);
+          moveCountLabel.setAttribute("aria-label", `Moves ${moveCount}`);
+        }
+
+        function generateObstacles() {
+          const locations = [];
+          for (let row = 0; row < SIZE; row += 1) {
+            for (let col = 0; col < SIZE; col += 1) {
+              if (row !== drone.row || col !== drone.col) locations.push(key(row, col));
+            }
+          }
+
+          obstacles = new Set();
+          while (obstacles.size < OBSTACLE_COUNT) {
+            const index = Math.floor(Math.random() * locations.length);
+            obstacles.add(locations[index]);
+            locations.splice(index, 1);
+          }
+        }
+
+        function move(direction) {
+          const offsets = {
+            left: [0, -1],
+            right: [0, 1],
+            up: [-1, 0],
+            down: [1, 0]
+          };
+          const [rowOffset, colOffset] = offsets[direction];
+          const nextRow = drone.row + rowOffset;
+          const nextCol = drone.col + colOffset;
+
+          if (nextRow < 0 || nextRow >= SIZE || nextCol < 0 || nextCol >= SIZE) {
+            setStatus("Edge", listening ? "listening" : "error");
+            return;
+          }
+          if (obstacles.has(key(nextRow, nextCol))) {
+            setStatus("Blocked", listening ? "listening" : "error");
+            return;
+          }
+
+          drone = { row: nextRow, col: nextCol };
+          moveCount += 1;
+          renderBoard();
+          setStatus(positionLabel.textContent, listening ? "listening" : "idle");
+        }
+
+        function updateListenButton() {
+          listenButton.setAttribute("aria-pressed", String(listening));
+          listenLabel.textContent = listening ? "Stop listening" : "Start listening";
+          listenButton.setAttribute("aria-label", listenLabel.textContent);
+          listenButton.title = listenLabel.textContent;
+        }
+
+        function directionForWord(word) {
+          const soundAlikes = {
+            left: ["left", "lef", "lift"],
+            right: ["right", "righ", "rite", "write", "wright", "wight", "light"],
+            up: ["up", "upp", "app"],
+            down: ["down", "doun", "dawn", "don", "town"]
+          };
+
+          for (const [direction, alternatives] of Object.entries(soundAlikes)) {
+            if (alternatives.includes(word)) return direction;
+          }
+          return null;
+        }
+
+        function scheduleRecognitionRestart(error) {
+          if (!listening) return;
+          window.clearTimeout(restartTimer);
+
+          if (error === "network") {
+            setStatus("Retrying…", "listening");
+          } else if (error === "no-speech") {
+            setStatus("On", "listening");
+          } else {
+            setStatus("Reconnecting…", "listening");
+          }
+
+          const delay = restartDelay;
+          restartTimer = window.setTimeout(() => {
+            if (listening) startRecognition();
+          }, error === "no-speech" ? 300 : delay);
+          if (error !== "no-speech") restartDelay = Math.min(restartDelay * 2, 5000);
+        }
+
+        function stopListening() {
+          listening = false;
+          window.clearTimeout(restartTimer);
+          window.clearTimeout(stableTimer);
+          updateListenButton();
+          if (recognition && recognitionActive) recognition.stop();
+          setStatus("Off");
+        }
+
+        function startRecognition() {
+          const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+          if (!SpeechRecognition || !listening || recognitionActive) return;
+
+          const currentRecognition = new SpeechRecognition();
+          recognition = currentRecognition;
+          currentRecognition.lang = "en-US";
+          currentRecognition.continuous = true;
+          currentRecognition.interimResults = true;
+          const processedCommandCounts = new Map();
+
+          currentRecognition.onstart = () => {
+            if (recognition !== currentRecognition) return;
+            if (!listening) {
+              currentRecognition.stop();
+              return;
+            }
+            recognitionActive = true;
+            window.clearTimeout(stableTimer);
+            stableTimer = window.setTimeout(() => {
+              restartDelay = 300;
+            }, 10000);
+            setStatus("On", "listening");
+          };
+          currentRecognition.onresult = (event) => {
+            if (recognition !== currentRecognition || !listening) return;
+
+            for (let index = event.resultIndex; index < event.results.length; index += 1) {
+              const result = event.results[index];
+              const transcript = result[0].transcript;
+              const words = transcript.toLowerCase().match(/\b[a-z]+\b/g) || [];
+              const commands = words.map(directionForWord).filter(Boolean);
+              const processedCount = processedCommandCounts.get(index) || 0;
+
+              for (let commandIndex = processedCount; commandIndex < commands.length; commandIndex += 1) {
+                move(commands[commandIndex]);
+              }
+              processedCommandCounts.set(index, Math.max(processedCount, commands.length));
+            }
+          };
+          currentRecognition.onerror = (event) => {
+            if (event.error === "aborted") return;
+            const messages = {
+              "not-allowed": "Mic access denied",
+              "service-not-allowed": "Service denied",
+              "audio-capture": "No microphone",
+            };
+            if (event.error === "network" || event.error === "no-speech") {
+              lastRecognitionError = event.error;
+            } else {
+              setStatus(messages[event.error] || `Error: ${event.error}`, "error");
+              listening = false;
+              updateListenButton();
+            }
+          };
+          currentRecognition.onend = () => {
+            if (recognition !== currentRecognition) return;
+            recognitionActive = false;
+            window.clearTimeout(stableTimer);
+            if (!listening) return;
+            scheduleRecognitionRestart(lastRecognitionError);
+            lastRecognitionError = null;
+          };
+
+          try {
+            currentRecognition.start();
+          } catch (error) {
+            recognitionActive = false;
+            listening = false;
+            updateListenButton();
+            setStatus("Start failed", "error");
+          }
+        }
+
+        function startListening() {
+          const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+          if (!SpeechRecognition) {
+            setStatus("Unsupported", "error");
+            return;
+          }
+
+          listening = true;
+          updateListenButton();
+          setStatus("Starting…");
+          startRecognition();
+        }
+
+        listenButton.addEventListener("click", () => {
+          if (listening) stopListening();
+          else startListening();
+        });
+        document.querySelectorAll(".arrow").forEach((button) => {
+          button.addEventListener("click", () => move(button.dataset.direction));
+        });
+        document.querySelector("#reset-button").addEventListener("click", () => {
+          drone = { row: 2, col: 2 };
+          moveCount = 0;
+          generateObstacles();
+          renderBoard();
+          setStatus("Ready");
+        });
+
+        generateObstacles();
+        renderBoard();
+      })();
+    </script>
+  </body>
+</html>
