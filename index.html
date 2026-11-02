@@ -358,6 +358,25 @@
       .history-title { margin: 0 0 7px; color: var(--muted); font-size: 11px; font-weight: 500; }
       .history-list { display: grid; gap: 5px; max-height: 120px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
       .history-list li { overflow-wrap: anywhere; color: #202124; font-size: 12px; line-height: 1.4; }
+      .history-list { max-height: 240px; gap: 10px; padding: 4px 0; }
+      .history-list li { padding: 9px 12px; background: #f3f4f6; border-radius: 8px; }
+      .history-list li[data-speaker="You"] { margin-left: 30px; background: #eff6ff; }
+      .history-list li[data-speaker="Drone"] { margin-right: 30px; }
+      .message-speaker { display: block; margin-bottom: 3px; color: var(--muted); font-size: 10px; }
+      .command-form { display: flex; gap: 8px; margin-top: 12px; }
+      .command-form input { flex: 1; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 5px; font: inherit; font-size: 13px; }
+      .command-form button, .stop-button { padding: 8px 12px; border: 1px solid var(--line); border-radius: 5px; background: #202124; color: #fff; cursor: pointer; font: inherit; font-size: 12px; }
+      .command-form .stop-button { background: #fff; color: #202124; }
+      .command-form :focus-visible, .stop-button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+      .command-help, .voice-preview { margin: 9px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .voice-preview:empty { display: none; }
+      .cell.route-cell { background: #eff6ff; border-color: #93b4ff; }
+      .cell.goal-cell { box-shadow: inset 0 0 0 2px #2563eb; }
+      .drone.rolling { animation: barrel-roll 850ms ease-in-out; }
+      @keyframes barrel-roll {
+        from { transform: perspective(160px) rotateY(0deg) rotate(0deg); }
+        to { transform: perspective(160px) rotateY(360deg) rotate(360deg); }
+      }
       @media (max-width: 410px) {
         .controls { grid-template-columns: 1fr; justify-items: center; }
         .control-section { width: 100%; justify-content: center; }
@@ -407,9 +426,17 @@
               <span class="visually-hidden">Regenerate grid</span>
             </button>
           </div>
-          <section class="history" id="history-panel" aria-label="Voice command history" hidden>
-            <h2 class="history-title">History</h2>
-            <ol class="history-list" id="history-list" aria-live="polite"></ol>
+          <section class="history" id="history-panel" aria-label="Drone chat">
+            <h2 class="history-title">Command chat</h2>
+            <ol class="history-list" id="history-list" role="log" aria-label="Commands and drone replies" aria-live="polite" aria-relevant="additions text"></ol>
+            <p class="voice-preview" id="voice-preview" aria-live="polite"></p>
+            <form class="command-form" id="command-form">
+              <label class="visually-hidden" for="command-input">Type a drone command</label>
+              <input id="command-input" name="command" placeholder="Type a command…" autocomplete="off" maxlength="500" required aria-describedby="command-help">
+              <button type="submit">Send</button>
+              <button class="stop-button" id="stop-button" type="button">Stop</button>
+            </form>
+            <p class="command-help" id="command-help">Try “go all the way left”, “find the nearest wall”, “count how many walls there are”, “go to F6”, or “do a barrel roll”. Blue cells show the planned route.</p>
           </section>
         </section>
       </div>
@@ -426,8 +453,10 @@
         const statusMessage = document.querySelector("#status-message");
         const listenButton = document.querySelector("#listen-button");
         const listenLabel = document.querySelector("#listen-label");
-        const historyPanel = document.querySelector("#history-panel");
         const historyList = document.querySelector("#history-list");
+        const commandInput = document.querySelector("#command-input");
+        const voicePreview = document.querySelector("#voice-preview");
+        const OFFSETS = { up: [-1, 0], right: [0, 1], down: [1, 0], left: [0, -1] };
 
         let drone = { row: 2, col: 2 };
         let obstacles = new Set();
@@ -436,6 +465,9 @@
         let navigationVersion = 0;
         let commandQueue = [];
         let processingCommands = false;
+        let activeJob = null;
+        let plannedRoute = new Set();
+        let goalKey = null;
         let recognition = null;
         let listening = false;
         let recognitionActive = false;
@@ -473,6 +505,8 @@
               cell.className = "cell";
               cell.setAttribute("role", "gridcell");
               cell.setAttribute("aria-label", `Row ${row + 1}, column ${String.fromCharCode(65 + col)}`);
+              if (plannedRoute.has(key(row, col))) cell.classList.add("route-cell");
+              if (goalKey === key(row, col)) cell.classList.add("goal-cell");
 
               if (drone.row === row && drone.col === col) {
                 cell.classList.add("drone-cell");
@@ -612,18 +646,34 @@
           const version = navigationVersion;
           navigating = true;
           setArrowControlsDisabled(true);
+          let row = drone.row;
+          let col = drone.col;
+          plannedRoute = new Set(route.map((direction) => {
+            const [dr, dc] = OFFSETS[direction];
+            row += dr;
+            col += dc;
+            return key(row, col);
+          }));
+          goalKey = key(row, col);
+          renderBoard();
           try {
             for (const direction of route) {
-              if (version !== navigationVersion) return;
-              if (!move(direction)) return;
+              if (version !== navigationVersion) return false;
+              plannedRoute.delete(key(drone.row, drone.col));
+              if (!move(direction)) return false;
               await new Promise((resolve) => window.setTimeout(resolve, 220));
             }
+            if (version !== navigationVersion) return false;
             if (finalStatus && version === navigationVersion) {
               setStatus(finalStatus, listening ? "listening" : "idle");
             }
+            return true;
           } finally {
             if (version === navigationVersion) {
               navigating = false;
+              plannedRoute.clear();
+              goalKey = null;
+              renderBoard();
               setArrowControlsDisabled(false);
             }
           }
@@ -635,22 +685,52 @@
           });
         }
 
-        function addHistory(transcript, resultIndex, historyEntries) {
-          let entry = historyEntries.get(resultIndex);
-          if (!entry) {
-            entry = document.createElement("li");
-            historyEntries.set(resultIndex, entry);
-            historyList.append(entry);
-          }
-          entry.textContent = transcript.trim();
-          historyPanel.hidden = false;
+        function addMessage(speaker, message, source = "") {
+          const entry = document.createElement("li");
+          entry.dataset.speaker = speaker;
+          const label = document.createElement("strong");
+          label.className = "message-speaker";
+          label.textContent = source ? `${speaker} · ${source}` : speaker;
+          const body = document.createElement("span");
+          body.textContent = message;
+          entry.append(label, body);
+          historyList.append(entry);
+          historyList.scrollTop = historyList.scrollHeight;
+          return body;
+        }
 
-          while (historyList.children.length > 8) {
-            const oldest = historyList.children[0];
-            historyList.removeChild(oldest);
-            for (const [index, item] of historyEntries) {
-              if (item === oldest) historyEntries.delete(index);
-            }
+        function updateReply(entry, message) {
+          entry.textContent = message;
+          historyList.scrollTop = historyList.scrollHeight;
+        }
+
+        function cancelCommands(reason) {
+          navigationVersion += 1;
+          if (activeJob) updateReply(activeJob.reply, reason);
+          for (const job of commandQueue) updateReply(job.reply, reason);
+          commandQueue = [];
+          navigating = false;
+          plannedRoute.clear();
+          goalKey = null;
+          setArrowControlsDisabled(false);
+          renderBoard();
+        }
+
+        function submitCommand(transcript, source = "typed") {
+          const text = transcript.trim();
+          if (!text) return;
+          addMessage("You", text, source);
+          const commands = parseVoiceCommands(text);
+          if (commands.some((command) => command.type === "stop")) {
+            cancelCommands("Cancelled by stop command.");
+            setStatus("Stopped", listening ? "listening" : "idle");
+            addMessage("Drone", `Stopped at ${positionLabel.textContent}. Pending commands cleared.`);
+          } else if (!commands.length) {
+            addMessage("Drone", "I didn't understand that command. Try a direction, a destination like F6, finding or counting walls, or a barrel roll.");
+          } else {
+            const reply = addMessage("Drone", processingCommands ? "Queued. Waiting for the current command…" : "Working on it…");
+            commandQueue.push({ commands, reply, version: navigationVersion });
+            processCommandQueue();
           }
         }
 
@@ -694,9 +774,11 @@
           const ordinalPattern = "(first|one|1st|1|second|two|2nd|2|third|three|3rd|3|fourth|four|4th|4|fifth|five|5th|5|sixth|six|6th|6)";
           const rowWord = /\b(top|upper|north|bottom|lower|south)\b/;
           const columnWord = /\b(left|west|right|east)\b/;
-          const destinationCue = /\b(to|toward|towards|reach|go|move|head|fly)\b/.test(text);
           const rowMatch = text.match(rowWord);
           const columnMatch = text.match(columnWord);
+          const coordinate = text.match(/\b([a-f])\s*([1-6])\b/);
+          if (coordinate) return { row: Number(coordinate[2]) - 1, col: coordinate[1].charCodeAt(0) - 97 };
+          if (/\b[a-z]\s*\d+\b/.test(text)) return null;
 
           if (rowMatch && columnMatch) {
             return {
@@ -706,8 +788,10 @@
           }
           if (/\b(center|centre|middle)\b/.test(text)) return { row: 2, col: 2 };
 
-          const rowOrdinal = text.match(new RegExp(`\\b(?:row|line)\\s+(?:number\\s+)?${ordinalPattern}\\b|\\b${ordinalPattern}\\s+(?:row|line)\\b`));
-          const columnOrdinal = text.match(new RegExp(`\\b(?:column|col)\\s+(?:number\\s+)?${ordinalPattern}\\b|\\b${ordinalPattern}\\s+(?:column|col)\\b`));
+          const rowOrdinal = text.match(new RegExp(`\\b(?:row|line)\\s+(?:number\\s+)?${ordinalPattern}\\b`)) ||
+            text.match(new RegExp(`\\b${ordinalPattern}\\s+(?:row|line)\\b`));
+          const columnOrdinal = text.match(new RegExp(`\\b(?:column|col)\\s+(?:number\\s+)?${ordinalPattern}\\b`)) ||
+            text.match(new RegExp(`\\b${ordinalPattern}\\s+(?:column|col)\\b`));
           if (rowOrdinal && columnOrdinal) {
             const values = rowOrdinal[0].match(new RegExp(ordinalPattern, "g"));
             const columns = columnOrdinal[0].match(new RegExp(ordinalPattern, "g"));
@@ -744,33 +828,56 @@
             };
           }
 
-          if (rowMatch && !columnMatch && (/\b(row|edge|side|end)\b/.test(text) || destinationCue)) {
+          if (rowMatch && !columnMatch && /\b(row|edge|side|end)\b/.test(text)) {
             return { row: /top|upper|north/.test(rowMatch[1]) ? 0 : SIZE - 1, col: drone.col };
           }
-          if (columnMatch && !rowMatch && (/\b(column|col|edge|side|end)\b/.test(text) || destinationCue)) {
+          if (columnMatch && !rowMatch && /\b(column|col|edge|side|end)\b/.test(text)) {
             return { row: drone.row, col: /left|west/.test(columnMatch[1]) ? 0 : SIZE - 1 };
           }
           return null;
         }
 
         function parseVoiceCommands(transcript) {
-          const text = transcript.toLowerCase();
+          const text = transcript.toLowerCase().replace(/[’]/g, "'").trim();
+          if (/\b(don't|do not|never)\b/.test(text)) return [];
+          const clauses = text.split(/\b(?:and\s+then|then|afterwards|followed\s+by)\b|\band\s+(?=(?:go|move|fly|head|do|perform|find|count|turn)\b)/).filter((part) => part.trim());
+          if (clauses.length > 1) {
+            const commands = clauses.map(parseVoiceCommands);
+            // Reject an incomplete sequence rather than silently executing only part of it.
+            return commands.every((part) => part.length) ? commands.flat() : [];
+          }
+          if (/^(?:please\s+)?(?:stop|halt|cancel)(?:\s+(?:now|please|moving|everything|all|commands|the drone))*[.!?]*$/.test(text)) return [{ type: "stop" }];
+          if (/\b(?:count|how many|number of)\b/.test(text) && /\b(?:walls?|obstacles?|blocks?)\b/.test(text)) return [{ type: "count-walls" }];
+          if (/\b(?:nearest|closest)\b/.test(text) && /\b(?:wall|obstacle|block)\b/.test(text)) return [{ type: "nearest-wall" }];
+          if (/\bbarrel\s+roll\b/.test(text)) return [{ type: "barrel-roll" }];
           const words = text.match(/\b[a-z0-9]+(?:st|nd|rd|th)?\b/g) || [];
           const directions = words.map(directionForWord).filter(Boolean);
-          const continueUntilBlocked = /\b(until|till|til|block|blocked|obstacle|wall|edge|stop|stops|stopping)\b/.test(text);
+          const continueUntilBlocked = /\b(until|till|til)\b/.test(text) || /\b(?:wall|obstacle|block|blocked)\b/.test(text);
           if (continueUntilBlocked && directions.length) {
             return [{ type: "until-blocked", direction: directions[directions.length - 1] }];
           }
 
+          if (directions.length === 1 && /\b(?:all the way|as far as|to the very|to the far|edge|side|end)\b/.test(text) &&
+              !/\b(corner|row|column|col|space|cell|square|spot)\b/.test(text)) {
+            return [{ type: "edge", direction: directions[0] }];
+          }
+
+          const amount = words.map(ordinalValue).find(Boolean);
+          if (directions.length === 1 && amount && /\b(one|two|three|four|five|six|[1-6])\b/.test(text) &&
+              /\b(steps?|spaces?|cells?|squares?|spots?|times)\b/.test(text) &&
+              !/\b(corner|row|column|col|top|bottom|on|at)\b/.test(text)) {
+            return [{ type: "direction", direction: directions[0], steps: amount }];
+          }
           const destination = parseDestination(text);
           if (destination) {
             return [{ type: "destination", ...destination }];
           }
-
           if (/\b(corner|row|column|col|space|cell|square|spot|center|centre|middle)\b/.test(text) ||
               (rowMatchForDestination(text) && columnMatchForDestination(text))) return [];
 
-          return directions.map((direction) => ({ type: "direction", direction }));
+          if (/\b[a-z]\s*\d+\b/.test(text)) return [];
+          if (/\b\d+\b/.test(text) && !amount) return [];
+          return directions.map((direction) => ({ type: "direction", direction, steps: amount || 1 }));
         }
 
         function rowMatchForDestination(text) {
@@ -781,67 +888,120 @@
           return /\b(left|west|right|east)\b/.test(text);
         }
 
-        async function moveToDestination(row, col) {
-          if (row < 0 || row >= SIZE || col < 0 || col >= SIZE) {
-            setStatus("Out of range", listening ? "listening" : "error");
-            return;
-          }
+        function inBounds(row, col) {
+          return row >= 0 && row < SIZE && col >= 0 && col < SIZE;
+        }
 
+        function positionName(location) {
+          const [row, col] = location.split(",").map(Number);
+          return `${String.fromCharCode(65 + col)}${row + 1}`;
+        }
+
+        // Dijkstra: settle the cheapest frontier cell and relax each traversable edge.
+        // Every orthogonal move costs one; walls have no traversable edges.
+        function dijkstra() {
           const startKey = key(drone.row, drone.col);
-          const queue = [{ row: drone.row, col: drone.col }];
+          const frontier = [{ location: startKey, distance: 0 }];
           const previous = new Map([[startKey, null]]);
           const distances = new Map([[startKey, 0]]);
-          const directions = [
-            ["up", -1, 0],
-            ["right", 0, 1],
-            ["down", 1, 0],
-            ["left", 0, -1]
-          ];
-
-          for (let cursor = 0; cursor < queue.length; cursor += 1) {
-            const current = queue[cursor];
-            for (const [direction, rowOffset, colOffset] of directions) {
-              const nextRow = current.row + rowOffset;
-              const nextCol = current.col + colOffset;
+          const settled = new Set();
+          while (frontier.length) {
+            frontier.sort((a, b) => a.distance - b.distance);
+            const current = frontier.shift();
+            if (settled.has(current.location)) continue;
+            settled.add(current.location);
+            const [row, col] = current.location.split(",").map(Number);
+            for (const [direction, [dr, dc]] of Object.entries(OFFSETS)) {
+              const nextRow = row + dr;
+              const nextCol = col + dc;
               const nextKey = key(nextRow, nextCol);
-              if (nextRow < 0 || nextRow >= SIZE || nextCol < 0 || nextCol >= SIZE ||
-                  obstacles.has(nextKey) || previous.has(nextKey)) continue;
-              previous.set(nextKey, { key: key(current.row, current.col), direction });
-              distances.set(nextKey, distances.get(key(current.row, current.col)) + 1);
-              queue.push({ row: nextRow, col: nextCol });
+              if (!inBounds(nextRow, nextCol) || obstacles.has(nextKey) || settled.has(nextKey)) continue;
+              const distance = current.distance + 1;
+              if (distance >= (distances.get(nextKey) ?? Infinity)) continue;
+              distances.set(nextKey, distance);
+              previous.set(nextKey, { key: current.location, direction });
+              frontier.push({ location: nextKey, distance });
             }
           }
+          return { startKey, previous, distances };
+        }
 
-          let targetKey = null;
-          let targetDistance = Infinity;
-          let routeDistance = Infinity;
-          for (const [candidateKey, distance] of distances) {
-            const [candidateRow, candidateCol] = candidateKey.split(",").map(Number);
-            const distanceToDestination = Math.abs(candidateRow - row) + Math.abs(candidateCol - col);
-            if (distanceToDestination < targetDistance ||
-                (distanceToDestination === targetDistance && distance < routeDistance)) {
-              targetKey = candidateKey;
-              targetDistance = distanceToDestination;
-              routeDistance = distance;
-            }
-          }
-
-          if (targetKey === null) {
-            setStatus("Unreachable", listening ? "listening" : "error");
-            return;
-          }
-
+        function reconstructRoute(search, targetKey) {
+          if (!search.distances.has(targetKey)) return null;
           const route = [];
           let currentKey = targetKey;
-          while (currentKey !== startKey) {
-            const step = previous.get(currentKey);
+          while (currentKey !== search.startKey) {
+            const step = search.previous.get(currentKey);
             route.push(step.direction);
             currentKey = step.key;
           }
-          route.reverse();
-          const [targetRow, targetCol] = targetKey.split(",").map(Number);
-          const finalPosition = `${String.fromCharCode(65 + targetCol)}${targetRow + 1}`;
-          await moveAlong(route, finalPosition);
+          return route.reverse();
+        }
+
+        async function navigateTo(targetKey, search = dijkstra(), description = positionName(targetKey)) {
+          const route = reconstructRoute(search, targetKey);
+          if (route === null) return `I can't reach ${description}. No clear path exists.`;
+          const destination = description === positionName(targetKey) ? description : `${description} at ${positionName(targetKey)}`;
+          if (!route.length) return `Already at ${destination}.`;
+          if (activeJob) updateReply(activeJob.reply, `Navigating to ${description}: shortest path is ${route.length} move${route.length === 1 ? "" : "s"}. Avoiding walls automatically.`);
+          const completed = await moveAlong(route, positionName(targetKey));
+          return completed ? `Reached ${destination} in ${route.length} move${route.length === 1 ? "" : "s"} using the shortest clear path.` : "Movement cancelled.";
+        }
+
+        async function moveToDestination(row, col) {
+          if (!inBounds(row, col)) return "That destination is outside the grid. Use columns A–F and rows 1–6.";
+          const targetKey = key(row, col);
+          if (obstacles.has(targetKey)) return `${positionName(targetKey)} contains a wall. Choose a clear destination, or ask me to find the nearest wall.`;
+          return navigateTo(targetKey);
+        }
+
+        async function moveToEdge(direction) {
+          const search = dijkstra();
+          const candidates = [...search.distances.keys()].filter((location) => {
+            const [row, col] = location.split(",").map(Number);
+            return direction === "left" ? col === 0 : direction === "right" ? col === SIZE - 1 : direction === "up" ? row === 0 : row === SIZE - 1;
+          });
+          candidates.sort((a, b) => search.distances.get(a) - search.distances.get(b));
+          if (!candidates.length) return `I can't reach the ${direction} edge. Walls block every route.`;
+          return navigateTo(candidates[0], search, `the ${direction} edge`);
+        }
+
+        function countWalls() {
+          const remaining = new Set(obstacles);
+          let count = 0;
+          for (const location of obstacles) {
+            if (!remaining.delete(location)) continue;
+            count += 1;
+            const stack = [location];
+            while (stack.length) {
+              const [row, col] = stack.pop().split(",").map(Number);
+              for (const [dr, dc] of Object.values(OFFSETS)) {
+                const neighbor = key(row + dr, col + dc);
+                if (remaining.delete(neighbor)) stack.push(neighbor);
+              }
+            }
+          }
+          return count;
+        }
+
+        async function findNearestWall() {
+          if (!obstacles.size) return "There are no walls on this grid.";
+          const search = dijkstra();
+          let nearest = null;
+          let distance = Infinity;
+          for (const wall of obstacles) {
+            const [row, col] = wall.split(",").map(Number);
+            for (const [dr, dc] of Object.values(OFFSETS)) {
+              const location = key(row + dr, col + dc);
+              const cost = search.distances.get(location) ?? Infinity;
+              if (cost < distance) {
+                nearest = { location, wall };
+                distance = cost;
+              }
+            }
+          }
+          if (!nearest) return "No wall has a reachable adjacent cell.";
+          return navigateTo(nearest.location, search, `the nearest wall (wall cell ${positionName(nearest.wall)})`);
         }
 
         async function moveUntilBlocked(direction) {
@@ -868,16 +1028,41 @@
             row = nextRow;
             col = nextCol;
           }
-          await moveAlong(route, stopStatus);
+          const completed = await moveAlong(route, stopStatus);
+          return completed ? `Stopped at ${positionLabel.textContent}, before ${stopStatus === "Edge" ? "the grid edge" : "a wall"}. Moved ${route.length} cell${route.length === 1 ? "" : "s"}.` : "Movement cancelled.";
         }
 
         async function executeVoiceCommand(command) {
           if (command.type === "destination") {
-            await moveToDestination(command.row, command.col);
+            return moveToDestination(command.row, command.col);
+          } else if (command.type === "edge") {
+            return moveToEdge(command.direction);
+          } else if (command.type === "nearest-wall") {
+            return findNearestWall();
+          } else if (command.type === "count-walls") {
+            const count = countWalls();
+            return `I count ${count} connected wall${count === 1 ? "" : "s"}, covering ${obstacles.size} blocked cells. Cells sharing a side form one wall; grid boundaries aren't counted.`;
+          } else if (command.type === "barrel-roll") {
+            const version = navigationVersion;
+            navigating = true;
+            setArrowControlsDisabled(true);
+            document.querySelector(".drone").classList.add("rolling");
+            if (activeJob) updateReply(activeJob.reply, "Doing a barrel roll!");
+            await new Promise((resolve) => window.setTimeout(resolve, 850));
+            if (version !== navigationVersion) return "Barrel roll cancelled.";
+            navigating = false;
+            setArrowControlsDisabled(false);
+            renderBoard();
+            return `Barrel roll complete! Holding position at ${positionLabel.textContent}.`;
           } else if (command.type === "until-blocked") {
-            await moveUntilBlocked(command.direction);
+            return moveUntilBlocked(command.direction);
           } else {
-            move(command.direction);
+            if (command.steps > 1) {
+              const [dr, dc] = OFFSETS[command.direction];
+              return moveToDestination(drone.row + dr * command.steps, drone.col + dc * command.steps);
+            }
+            const moved = move(command.direction);
+            return moved ? `Moved ${command.direction} to ${positionLabel.textContent}.` : `Can't move ${command.direction}: ${statusMessage.textContent === "Edge" ? "the grid edge is here" : "a wall is in the way"}. Ask for a destination to route around walls.`;
           }
         }
 
@@ -886,7 +1071,29 @@
           processingCommands = true;
           try {
             while (commandQueue.length) {
-              await executeVoiceCommand(commandQueue.shift());
+              const job = commandQueue.shift();
+              activeJob = job;
+              const replies = [];
+              try {
+                for (const command of job.commands) {
+                  if (job.version !== navigationVersion) break;
+                  const reply = await executeVoiceCommand(command);
+                  if (job.version !== navigationVersion) break;
+                  replies.push(reply);
+                  updateReply(job.reply, replies.join(" "));
+                }
+              } catch (error) {
+                if (job.version === navigationVersion) {
+                  updateReply(job.reply, "I couldn't complete that command. Please try again.");
+                  setStatus("Command failed", "error");
+                  navigating = false;
+                  setArrowControlsDisabled(false);
+                  renderBoard();
+                }
+                console.error(error);
+              } finally {
+                activeJob = null;
+              }
             }
           } finally {
             processingCommands = false;
@@ -917,6 +1124,7 @@
           listening = false;
           window.clearTimeout(restartTimer);
           window.clearTimeout(stableTimer);
+          voicePreview.textContent = "";
           updateListenButton();
           if (recognition && recognitionActive) recognition.stop();
           setStatus("Off");
@@ -931,8 +1139,7 @@
           currentRecognition.lang = "en-US";
           currentRecognition.continuous = true;
           currentRecognition.interimResults = true;
-          const processedCommandsByResult = new Map();
-          const historyEntriesByResult = new Map();
+          const processedResults = new Set();
 
           currentRecognition.onstart = () => {
             if (recognition !== currentRecognition) return;
@@ -949,32 +1156,21 @@
           };
           currentRecognition.onresult = (event) => {
             if (recognition !== currentRecognition || !listening) return;
-
+            const interim = [];
             for (let index = event.resultIndex; index < event.results.length; index += 1) {
               const result = event.results[index];
               const transcript = result[0].transcript;
-              const commands = parseVoiceCommands(transcript);
-              const processed = processedCommandsByResult.get(index) || { commands: [] };
-
-              if (commands.length) addHistory(transcript, index, historyEntriesByResult);
-              for (let commandIndex = 0; commandIndex < commands.length; commandIndex += 1) {
-                const command = commands[commandIndex];
-                const previousCommand = processed.commands[commandIndex];
-                const commandChanged = previousCommand && (
-                  previousCommand.type !== command.type ||
-                  previousCommand.direction !== command.direction ||
-                  previousCommand.row !== command.row ||
-                  previousCommand.col !== command.col
-                );
-                if (!previousCommand || commandChanged) {
-                  commandQueue.push(command);
-                  processCommandQueue();
-                }
+              if (!result.isFinal) {
+                interim.push(transcript.trim());
+              } else if (!processedResults.has(index)) {
+                processedResults.add(index);
+                submitCommand(transcript, "voice");
               }
-              processedCommandsByResult.set(index, { commands });
             }
+            voicePreview.textContent = interim.length ? `Hearing: ${interim.join(" ")}…` : "";
           };
           currentRecognition.onerror = (event) => {
+            if (recognition !== currentRecognition) return;
             if (event.error === "aborted") return;
             const messages = {
               "not-allowed": "Mic access denied",
@@ -985,6 +1181,8 @@
               lastRecognitionError = event.error;
             } else {
               setStatus(messages[event.error] || `Error: ${event.error}`, "error");
+              addMessage("Drone", `${messages[event.error] || "Voice recognition failed"}. You can still type a command below.`);
+              voicePreview.textContent = "";
               listening = false;
               updateListenButton();
             }
@@ -992,6 +1190,7 @@
           currentRecognition.onend = () => {
             if (recognition !== currentRecognition) return;
             recognitionActive = false;
+            voicePreview.textContent = "";
             window.clearTimeout(stableTimer);
             if (!listening) return;
             scheduleRecognitionRestart(lastRecognitionError);
@@ -1012,6 +1211,7 @@
           const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
           if (!SpeechRecognition) {
             setStatus("Unsupported", "error");
+            addMessage("Drone", "Voice recognition isn't supported in this browser. Type your commands below, or use Chrome or Edge for voice control.");
             return;
           }
 
@@ -1027,23 +1227,29 @@
         });
         document.querySelectorAll(".arrow").forEach((button) => {
           button.addEventListener("click", () => {
-            if (!navigating) move(button.dataset.direction);
+            if (!navigating) submitCommand(`move ${button.dataset.direction}`, "button");
           });
         });
+        document.querySelector("#command-form").addEventListener("submit", (event) => {
+          event.preventDefault();
+          submitCommand(commandInput.value);
+          commandInput.value = "";
+          commandInput.focus();
+        });
+        document.querySelector("#stop-button").addEventListener("click", () => submitCommand("stop", "button"));
         document.querySelector("#reset-button").addEventListener("click", () => {
-          navigationVersion += 1;
-          navigating = false;
-          commandQueue = [];
-          setArrowControlsDisabled(false);
+          cancelCommands("Cancelled because the grid was regenerated.");
           drone = { row: 2, col: 2 };
           moveCount = 0;
           generateObstacles();
           renderBoard();
           setStatus("Ready");
+          addMessage("Drone", "New grid ready. Position reset to C3 and move count reset to zero.");
         });
 
         generateObstacles();
         renderBoard();
+        addMessage("Drone", "Ready at C3. Type or say a command. I can navigate around walls, find or count them, and do a barrel roll. Say ‘stop’ or press Stop to cancel movement.");
       })();
     </script>
   </body>
