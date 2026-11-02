@@ -1,7 +1,7 @@
 # HCI-Drone-Project
 
 A small browser-based, voice-controlled drone navigation demo. The drone moves
-around a randomly generated 5×5 grid, avoiding obstacles and the grid edges.
+around a randomly generated 6×6 grid, avoiding obstacles and the grid edges.
 
 ## Run it
 
@@ -9,15 +9,14 @@ Open `index.html` in a recent version of Chrome or Microsoft Edge. For the most
 reliable microphone permissions, serve the project from `localhost` (for
 example, with VS Code's Live Server extension) and open the local URL.
 
-Select **Start listening** and allow microphone access, then say **left**,
-**right**, **up**, or **down**. Common speech-recognition near-misses are also
-accepted (for example, “lift” for left, “write” or “light” for right, “app”
-for up, and “town” for down). A direction moves as soon as it appears in an
-interim recognition result; it does not wait for the sentence to finish.
-Transient network and no-speech interruptions are retried automatically, with
-increasing delays for repeated network interruptions. Movement into obstacles
-or beyond the grid is blocked. The arrow buttons also move the drone manually,
-and **Regenerate grid** creates a new obstacle layout and resets its position.
+Select **Start listening** and allow microphone access. Use natural variations
+of a direction or destination, such as “go to the southwest corner,” “take the
+second spot on top,” or “head over to row three, column two.” You can also say
+“keep going right until a block” (or another direction). Destination routes go
+around obstacles and visibly move one cell at a time. The history shows only
+recognized phrases that contain a command. Arrow buttons move one cell.
+**Regenerate grid** creates a connected obstacle layout with varied shapes and
+resets the drone.
 
 Voice recognition uses the browser's Web Speech API and requires a supported
 browser and microphone permission. The page responds to the browser's

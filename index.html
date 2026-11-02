@@ -111,7 +111,7 @@
       .board-wrap { padding: 20px 22px 16px; }
       .coordinates {
         display: grid;
-        grid-template-columns: 18px repeat(5, 1fr);
+        grid-template-columns: 18px repeat(6, 1fr);
         gap: 8px;
         padding: 0 0 8px;
         color: #98a2b3;
@@ -124,7 +124,7 @@
       .row-label { color: #98a2b3; font-size: 10px; font-weight: 700; text-align: center; }
       .grid {
         display: grid;
-        grid-template-columns: repeat(5, 1fr);
+        grid-template-columns: repeat(6, 1fr);
         gap: 8px;
       }
       .cell {
@@ -304,7 +304,7 @@
         --blocked: #a16207;
       }
       body { background: #fff; }
-      .app { width: min(520px, calc(100% - 32px)); padding: 24px 0; }
+      .app { width: min(680px, calc(100% - 32px)); padding: 24px 0; }
       .visually-hidden {
         position: absolute;
         width: 1px;
@@ -319,7 +319,7 @@
       .workspace { display: grid; grid-template-columns: 1fr; gap: 12px; }
       .card { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
       .board-wrap { padding: 0; }
-      .coordinates { grid-template-columns: 20px repeat(5, 1fr); padding-bottom: 5px; }
+      .coordinates { grid-template-columns: 20px repeat(6, 1fr); padding-bottom: 5px; }
       .board-row { grid-template-columns: 20px 1fr; gap: 5px; }
       .board-row + .board-row { margin-top: 5px; }
       .grid { gap: 5px; }
@@ -349,6 +349,15 @@
       .reset-button { width: 32px; min-height: 32px; margin: 0; padding: 6px; border: 1px solid var(--line); border-radius: 0; color: #202124; background: #fff; }
       .reset-button svg { display: block; width: 18px; height: 18px; }
       .reset-button:hover { border-color: #9ca3af; background: #f9fafb; }
+      .history {
+        grid-column: 1 / -1;
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+      }
+      .history[hidden] { display: none; }
+      .history-title { margin: 0 0 7px; color: var(--muted); font-size: 11px; font-weight: 500; }
+      .history-list { display: grid; gap: 5px; max-height: 120px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+      .history-list li { overflow-wrap: anywhere; color: #202124; font-size: 12px; line-height: 1.4; }
       @media (max-width: 410px) {
         .controls { grid-template-columns: 1fr; justify-items: center; }
         .control-section { width: 100%; justify-content: center; }
@@ -362,9 +371,9 @@
           <h1 class="visually-hidden" id="board-title">Navigation grid</h1>
           <div class="board-wrap">
             <div class="coordinates" aria-hidden="true">
-              <span></span><span>A</span><span>B</span><span>C</span><span>D</span><span>E</span>
+              <span></span><span>A</span><span>B</span><span>C</span><span>D</span><span>E</span><span>F</span>
             </div>
-            <div id="board" role="grid" aria-label="Drone navigation grid, 5 rows by 5 columns"></div>
+            <div id="board" role="grid" aria-label="Drone navigation grid, 6 rows by 6 columns"></div>
           </div>
           <div class="board-footer">
             <span id="position" aria-label="Position C3">C3</span>
@@ -398,13 +407,17 @@
               <span class="visually-hidden">Regenerate grid</span>
             </button>
           </div>
+          <section class="history" id="history-panel" aria-label="Voice command history" hidden>
+            <h2 class="history-title">History</h2>
+            <ol class="history-list" id="history-list" aria-live="polite"></ol>
+          </section>
         </section>
       </div>
     </main>
 
     <script>
       (() => {
-        const SIZE = 5;
+        const SIZE = 6;
         const OBSTACLE_COUNT = 5;
         const board = document.querySelector("#board");
         const positionLabel = document.querySelector("#position");
@@ -413,10 +426,16 @@
         const statusMessage = document.querySelector("#status-message");
         const listenButton = document.querySelector("#listen-button");
         const listenLabel = document.querySelector("#listen-label");
+        const historyPanel = document.querySelector("#history-panel");
+        const historyList = document.querySelector("#history-list");
 
         let drone = { row: 2, col: 2 };
         let obstacles = new Set();
         let moveCount = 0;
+        let navigating = false;
+        let navigationVersion = 0;
+        let commandQueue = [];
+        let processingCommands = false;
         let recognition = null;
         let listening = false;
         let recognitionActive = false;
@@ -477,18 +496,88 @@
         }
 
         function generateObstacles() {
-          const locations = [];
-          for (let row = 0; row < SIZE; row += 1) {
-            for (let col = 0; col < SIZE; col += 1) {
-              if (row !== drone.row || col !== drone.col) locations.push(key(row, col));
+          const patterns = [
+            [[0, 0], [1, 0], [2, 0], [2, 1], [2, 2]],
+            [[0, 0], [0, 1], [1, 1], [1, 2], [2, 2]],
+            [[0, 0], [0, 1], [0, 2], [1, 1], [2, 1]],
+            [[0, 0], [1, 0], [1, 1], [2, 1], [2, 2]],
+            [[0, 1], [1, 0], [1, 1], [1, 2], [2, 1]]
+          ];
+
+          function connected(candidate) {
+            const start = key(drone.row, drone.col);
+            const visited = new Set([start]);
+            const queue = [{ row: drone.row, col: drone.col }];
+            const offsets = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+
+            for (let index = 0; index < queue.length; index += 1) {
+              const { row, col } = queue[index];
+              for (const [rowOffset, colOffset] of offsets) {
+                const nextRow = row + rowOffset;
+                const nextCol = col + colOffset;
+                const nextKey = key(nextRow, nextCol);
+                if (nextRow < 0 || nextRow >= SIZE || nextCol < 0 || nextCol >= SIZE ||
+                    candidate.has(nextKey) || visited.has(nextKey)) continue;
+                visited.add(nextKey);
+                queue.push({ row: nextRow, col: nextCol });
+              }
+            }
+
+            return visited.size === SIZE * SIZE - candidate.size;
+          }
+
+          for (let attempt = 0; attempt < 250; attempt += 1) {
+            const pattern = patterns[Math.floor(Math.random() * patterns.length)];
+            const rotation = Math.floor(Math.random() * 4);
+            const reflect = Math.random() < 0.5;
+            const transformed = pattern.map(([originalRow, originalCol]) => {
+              let row = originalRow;
+              let col = reflect ? -originalCol : originalCol;
+              for (let turn = 0; turn < rotation; turn += 1) {
+                [row, col] = [col, -row];
+              }
+              return [row, col];
+            });
+            const minRow = Math.min(...transformed.map(([row]) => row));
+            const maxRow = Math.max(...transformed.map(([row]) => row));
+            const minCol = Math.min(...transformed.map(([, col]) => col));
+            const maxCol = Math.max(...transformed.map(([, col]) => col));
+            const offsetRow = Math.floor(Math.random() * (SIZE - (maxRow - minRow)));
+            const offsetCol = Math.floor(Math.random() * (SIZE - (maxCol - minCol)));
+            const candidate = new Set(transformed.map(([row, col]) =>
+              key(row - minRow + offsetRow, col - minCol + offsetCol)));
+
+            if (candidate.has(key(drone.row, drone.col))) continue;
+
+            const extraCount = Math.floor(Math.random() * 3);
+            for (let extra = 0; extra < extraCount; extra += 1) {
+              const options = [];
+              for (let row = 0; row < SIZE; row += 1) {
+                for (let col = 0; col < SIZE; col += 1) {
+                  const location = key(row, col);
+                  if (location === key(drone.row, drone.col) || candidate.has(location)) continue;
+                  if ([[-1, 0], [1, 0], [0, -1], [0, 1]].some(([dr, dc]) =>
+                    candidate.has(key(row + dr, col + dc)))) options.push(location);
+                }
+              }
+              if (!options.length) break;
+              candidate.add(options[Math.floor(Math.random() * options.length)]);
+            }
+
+            if (connected(candidate)) {
+              obstacles = candidate;
+              return;
             }
           }
 
           obstacles = new Set();
           while (obstacles.size < OBSTACLE_COUNT) {
-            const index = Math.floor(Math.random() * locations.length);
-            obstacles.add(locations[index]);
-            locations.splice(index, 1);
+            const row = Math.floor(Math.random() * SIZE);
+            const col = Math.floor(Math.random() * SIZE);
+            const location = key(row, col);
+            if (location === key(drone.row, drone.col)) continue;
+            obstacles.add(location);
+            if (obstacles.size === OBSTACLE_COUNT && !connected(obstacles)) obstacles.delete(location);
           }
         }
 
@@ -516,6 +605,53 @@
           moveCount += 1;
           renderBoard();
           setStatus(positionLabel.textContent, listening ? "listening" : "idle");
+          return true;
+        }
+
+        async function moveAlong(route, finalStatus = null) {
+          const version = navigationVersion;
+          navigating = true;
+          setArrowControlsDisabled(true);
+          try {
+            for (const direction of route) {
+              if (version !== navigationVersion) return;
+              if (!move(direction)) return;
+              await new Promise((resolve) => window.setTimeout(resolve, 220));
+            }
+            if (finalStatus && version === navigationVersion) {
+              setStatus(finalStatus, listening ? "listening" : "idle");
+            }
+          } finally {
+            if (version === navigationVersion) {
+              navigating = false;
+              setArrowControlsDisabled(false);
+            }
+          }
+        }
+
+        function setArrowControlsDisabled(disabled) {
+          document.querySelectorAll(".arrow").forEach((button) => {
+            button.disabled = disabled;
+          });
+        }
+
+        function addHistory(transcript, resultIndex, historyEntries) {
+          let entry = historyEntries.get(resultIndex);
+          if (!entry) {
+            entry = document.createElement("li");
+            historyEntries.set(resultIndex, entry);
+            historyList.append(entry);
+          }
+          entry.textContent = transcript.trim();
+          historyPanel.hidden = false;
+
+          while (historyList.children.length > 8) {
+            const oldest = historyList.children[0];
+            historyList.removeChild(oldest);
+            for (const [index, item] of historyEntries) {
+              if (item === oldest) historyEntries.delete(index);
+            }
+          }
         }
 
         function updateListenButton() {
@@ -527,16 +663,235 @@
 
         function directionForWord(word) {
           const soundAlikes = {
-            left: ["left", "lef", "lift"],
-            right: ["right", "righ", "rite", "write", "wright", "wight", "light"],
-            up: ["up", "upp", "app"],
-            down: ["down", "doun", "dawn", "don", "town"]
+            left: ["left", "lef", "lift", "west", "westward"],
+            right: ["right", "righ", "rite", "write", "wright", "wight", "light", "east", "eastward"],
+            up: ["up", "upp", "app", "north", "northward"],
+            down: ["down", "doun", "dawn", "don", "town", "south", "southward"]
           };
 
           for (const [direction, alternatives] of Object.entries(soundAlikes)) {
             if (alternatives.includes(word)) return direction;
           }
           return null;
+        }
+
+        function ordinalValue(word) {
+          const ordinals = {
+            first: 1, one: 1, "1": 1, "1st": 1,
+            second: 2, two: 2, "2": 2, "2nd": 2,
+            third: 3, three: 3, "3": 3, "3rd": 3,
+            fourth: 4, four: 4, "4": 4, "4th": 4,
+            fifth: 5, five: 5, "5": 5, "5th": 5,
+            sixth: 6, six: 6, "6": 6, "6th": 6
+          };
+          return ordinals[word] || null;
+        }
+
+        function parseDestination(transcript) {
+          const text = transcript.toLowerCase()
+            .replace(/\b(north|south)(east|west)\b/g, "$1 $2")
+            .replace(/[,-]/g, " ");
+          const ordinalPattern = "(first|one|1st|1|second|two|2nd|2|third|three|3rd|3|fourth|four|4th|4|fifth|five|5th|5|sixth|six|6th|6)";
+          const rowWord = /\b(top|upper|north|bottom|lower|south)\b/;
+          const columnWord = /\b(left|west|right|east)\b/;
+          const destinationCue = /\b(to|toward|towards|reach|go|move|head|fly)\b/.test(text);
+          const rowMatch = text.match(rowWord);
+          const columnMatch = text.match(columnWord);
+
+          if (rowMatch && columnMatch) {
+            return {
+              row: /top|upper|north/.test(rowMatch[1]) ? 0 : SIZE - 1,
+              col: /left|west/.test(columnMatch[1]) ? 0 : SIZE - 1
+            };
+          }
+          if (/\b(center|centre|middle)\b/.test(text)) return { row: 2, col: 2 };
+
+          const rowOrdinal = text.match(new RegExp(`\\b(?:row|line)\\s+(?:number\\s+)?${ordinalPattern}\\b|\\b${ordinalPattern}\\s+(?:row|line)\\b`));
+          const columnOrdinal = text.match(new RegExp(`\\b(?:column|col)\\s+(?:number\\s+)?${ordinalPattern}\\b|\\b${ordinalPattern}\\s+(?:column|col)\\b`));
+          if (rowOrdinal && columnOrdinal) {
+            const values = rowOrdinal[0].match(new RegExp(ordinalPattern, "g"));
+            const columns = columnOrdinal[0].match(new RegExp(ordinalPattern, "g"));
+            return { row: ordinalValue(values[0]) - 1, col: ordinalValue(columns[0]) - 1 };
+          }
+          if (rowMatch && columnOrdinal && /\brow\b/.test(text)) {
+            const values = columnOrdinal[0].match(new RegExp(ordinalPattern, "g"));
+            return {
+              row: /top|upper|north/.test(rowMatch[1]) ? 0 : SIZE - 1,
+              col: ordinalValue(values[0]) - 1
+            };
+          }
+          if (columnMatch && rowOrdinal && /\bcolumn\b/.test(text)) {
+            const values = rowOrdinal[0].match(new RegExp(ordinalPattern, "g"));
+            return {
+              row: ordinalValue(values[0]) - 1,
+              col: /left|west/.test(columnMatch[1]) ? 0 : SIZE - 1
+            };
+          }
+
+          const positionMatch = text.match(new RegExp(`\\b${ordinalPattern}\\b`));
+          const spacePosition = positionMatch ? ordinalValue(positionMatch[0]) : null;
+          const hasSpace = /\b(space|cell|square|spot)\b/.test(text);
+          if (spacePosition && hasSpace && rowMatch) {
+            return {
+              row: /top|upper|north/.test(rowMatch[1]) ? 0 : SIZE - 1,
+              col: spacePosition - 1
+            };
+          }
+          if (spacePosition && hasSpace && columnMatch) {
+            return {
+              row: spacePosition - 1,
+              col: /left|west/.test(columnMatch[1]) ? 0 : SIZE - 1
+            };
+          }
+
+          if (rowMatch && !columnMatch && (/\b(row|edge|side|end)\b/.test(text) || destinationCue)) {
+            return { row: /top|upper|north/.test(rowMatch[1]) ? 0 : SIZE - 1, col: drone.col };
+          }
+          if (columnMatch && !rowMatch && (/\b(column|col|edge|side|end)\b/.test(text) || destinationCue)) {
+            return { row: drone.row, col: /left|west/.test(columnMatch[1]) ? 0 : SIZE - 1 };
+          }
+          return null;
+        }
+
+        function parseVoiceCommands(transcript) {
+          const text = transcript.toLowerCase();
+          const words = text.match(/\b[a-z0-9]+(?:st|nd|rd|th)?\b/g) || [];
+          const directions = words.map(directionForWord).filter(Boolean);
+          const continueUntilBlocked = /\b(until|till|til|block|blocked|obstacle|wall|edge|stop|stops|stopping)\b/.test(text);
+          if (continueUntilBlocked && directions.length) {
+            return [{ type: "until-blocked", direction: directions[directions.length - 1] }];
+          }
+
+          const destination = parseDestination(text);
+          if (destination) {
+            return [{ type: "destination", ...destination }];
+          }
+
+          if (/\b(corner|row|column|col|space|cell|square|spot|center|centre|middle)\b/.test(text) ||
+              (rowMatchForDestination(text) && columnMatchForDestination(text))) return [];
+
+          return directions.map((direction) => ({ type: "direction", direction }));
+        }
+
+        function rowMatchForDestination(text) {
+          return /\b(top|upper|north|bottom|lower|south)\b/.test(text);
+        }
+
+        function columnMatchForDestination(text) {
+          return /\b(left|west|right|east)\b/.test(text);
+        }
+
+        async function moveToDestination(row, col) {
+          if (row < 0 || row >= SIZE || col < 0 || col >= SIZE) {
+            setStatus("Out of range", listening ? "listening" : "error");
+            return;
+          }
+
+          const startKey = key(drone.row, drone.col);
+          const queue = [{ row: drone.row, col: drone.col }];
+          const previous = new Map([[startKey, null]]);
+          const distances = new Map([[startKey, 0]]);
+          const directions = [
+            ["up", -1, 0],
+            ["right", 0, 1],
+            ["down", 1, 0],
+            ["left", 0, -1]
+          ];
+
+          for (let cursor = 0; cursor < queue.length; cursor += 1) {
+            const current = queue[cursor];
+            for (const [direction, rowOffset, colOffset] of directions) {
+              const nextRow = current.row + rowOffset;
+              const nextCol = current.col + colOffset;
+              const nextKey = key(nextRow, nextCol);
+              if (nextRow < 0 || nextRow >= SIZE || nextCol < 0 || nextCol >= SIZE ||
+                  obstacles.has(nextKey) || previous.has(nextKey)) continue;
+              previous.set(nextKey, { key: key(current.row, current.col), direction });
+              distances.set(nextKey, distances.get(key(current.row, current.col)) + 1);
+              queue.push({ row: nextRow, col: nextCol });
+            }
+          }
+
+          let targetKey = null;
+          let targetDistance = Infinity;
+          let routeDistance = Infinity;
+          for (const [candidateKey, distance] of distances) {
+            const [candidateRow, candidateCol] = candidateKey.split(",").map(Number);
+            const distanceToDestination = Math.abs(candidateRow - row) + Math.abs(candidateCol - col);
+            if (distanceToDestination < targetDistance ||
+                (distanceToDestination === targetDistance && distance < routeDistance)) {
+              targetKey = candidateKey;
+              targetDistance = distanceToDestination;
+              routeDistance = distance;
+            }
+          }
+
+          if (targetKey === null) {
+            setStatus("Unreachable", listening ? "listening" : "error");
+            return;
+          }
+
+          const route = [];
+          let currentKey = targetKey;
+          while (currentKey !== startKey) {
+            const step = previous.get(currentKey);
+            route.push(step.direction);
+            currentKey = step.key;
+          }
+          route.reverse();
+          const [targetRow, targetCol] = targetKey.split(",").map(Number);
+          const finalPosition = `${String.fromCharCode(65 + targetCol)}${targetRow + 1}`;
+          await moveAlong(route, finalPosition);
+        }
+
+        async function moveUntilBlocked(direction) {
+          const route = [];
+          let row = drone.row;
+          let col = drone.col;
+          let stopStatus = "Blocked";
+          const [rowOffset, colOffset] = {
+            left: [0, -1],
+            right: [0, 1],
+            up: [-1, 0],
+            down: [1, 0]
+          }[direction];
+
+          for (let step = 0; step <= SIZE; step += 1) {
+            const nextRow = row + rowOffset;
+            const nextCol = col + colOffset;
+            if (nextRow < 0 || nextRow >= SIZE || nextCol < 0 || nextCol >= SIZE) {
+              stopStatus = "Edge";
+              break;
+            }
+            if (obstacles.has(key(nextRow, nextCol))) break;
+            route.push(direction);
+            row = nextRow;
+            col = nextCol;
+          }
+          await moveAlong(route, stopStatus);
+        }
+
+        async function executeVoiceCommand(command) {
+          if (command.type === "destination") {
+            await moveToDestination(command.row, command.col);
+          } else if (command.type === "until-blocked") {
+            await moveUntilBlocked(command.direction);
+          } else {
+            move(command.direction);
+          }
+        }
+
+        async function processCommandQueue() {
+          if (processingCommands) return;
+          processingCommands = true;
+          try {
+            while (commandQueue.length) {
+              await executeVoiceCommand(commandQueue.shift());
+            }
+          } finally {
+            processingCommands = false;
+            if (commandQueue.length) processCommandQueue();
+          }
         }
 
         function scheduleRecognitionRestart(error) {
@@ -576,7 +931,8 @@
           currentRecognition.lang = "en-US";
           currentRecognition.continuous = true;
           currentRecognition.interimResults = true;
-          const processedCommandCounts = new Map();
+          const processedCommandsByResult = new Map();
+          const historyEntriesByResult = new Map();
 
           currentRecognition.onstart = () => {
             if (recognition !== currentRecognition) return;
@@ -597,14 +953,25 @@
             for (let index = event.resultIndex; index < event.results.length; index += 1) {
               const result = event.results[index];
               const transcript = result[0].transcript;
-              const words = transcript.toLowerCase().match(/\b[a-z]+\b/g) || [];
-              const commands = words.map(directionForWord).filter(Boolean);
-              const processedCount = processedCommandCounts.get(index) || 0;
+              const commands = parseVoiceCommands(transcript);
+              const processed = processedCommandsByResult.get(index) || { commands: [] };
 
-              for (let commandIndex = processedCount; commandIndex < commands.length; commandIndex += 1) {
-                move(commands[commandIndex]);
+              if (commands.length) addHistory(transcript, index, historyEntriesByResult);
+              for (let commandIndex = 0; commandIndex < commands.length; commandIndex += 1) {
+                const command = commands[commandIndex];
+                const previousCommand = processed.commands[commandIndex];
+                const commandChanged = previousCommand && (
+                  previousCommand.type !== command.type ||
+                  previousCommand.direction !== command.direction ||
+                  previousCommand.row !== command.row ||
+                  previousCommand.col !== command.col
+                );
+                if (!previousCommand || commandChanged) {
+                  commandQueue.push(command);
+                  processCommandQueue();
+                }
               }
-              processedCommandCounts.set(index, Math.max(processedCount, commands.length));
+              processedCommandsByResult.set(index, { commands });
             }
           };
           currentRecognition.onerror = (event) => {
@@ -659,9 +1026,15 @@
           else startListening();
         });
         document.querySelectorAll(".arrow").forEach((button) => {
-          button.addEventListener("click", () => move(button.dataset.direction));
+          button.addEventListener("click", () => {
+            if (!navigating) move(button.dataset.direction);
+          });
         });
         document.querySelector("#reset-button").addEventListener("click", () => {
+          navigationVersion += 1;
+          navigating = false;
+          commandQueue = [];
+          setArrowControlsDisabled(false);
           drone = { row: 2, col: 2 };
           moveCount = 0;
           generateObstacles();
