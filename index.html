@@ -111,7 +111,7 @@
       .board-wrap { padding: 20px 22px 16px; }
       .coordinates {
         display: grid;
-        grid-template-columns: 18px repeat(6, 1fr);
+        grid-template-columns: 18px repeat(7, 1fr);
         gap: 8px;
         padding: 0 0 8px;
         color: #98a2b3;
@@ -124,7 +124,7 @@
       .row-label { color: #98a2b3; font-size: 10px; font-weight: 700; text-align: center; }
       .grid {
         display: grid;
-        grid-template-columns: repeat(6, 1fr);
+        grid-template-columns: repeat(7, 1fr);
         gap: 8px;
       }
       .cell {
@@ -147,6 +147,10 @@
         border-color: #f0d7b8;
         background-color: #fffaf3;
       }
+      .cell.remembered-cell { border-style: dashed; background-color: #f3f4f6; }
+      .cell.unknown-cell { background: repeating-linear-gradient(135deg, #f3f4f6, #f3f4f6 5px, #e9edf2 5px, #e9edf2 10px); }
+      .cell.unknown-cell::after { color: #667085; content: "?"; font-size: 15px; font-weight: 700; }
+      .cell.remembered-obstacle-cell { border-style: dashed; opacity: 0.62; }
       .drone {
         width: 43px;
         height: 43px;
@@ -167,6 +171,12 @@
       .legend-item { display: inline-flex; align-items: center; gap: 7px; }
       .legend-swatch { width: 9px; height: 9px; border-radius: 3px; background: var(--blue); }
       .legend-swatch.blocked { background: var(--blocked); }
+      .vision-panel { padding: 10px 22px 14px; border-top: 1px solid var(--line); }
+      .vision-status { margin: 0 0 9px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+      .vision-legend { display: flex; flex-wrap: wrap; gap: 10px 16px; color: var(--muted); font-size: 10px; }
+      .vision-swatch { width: 10px; height: 10px; border: 1px solid #98a2b3; background: #fff; }
+      .vision-swatch.remembered { border-style: dashed; background: #f3f4f6; }
+      .vision-swatch.unknown { background: repeating-linear-gradient(135deg, #f3f4f6, #f3f4f6 3px, #e9edf2 3px, #e9edf2 6px); }
       .board-footer {
         display: flex;
         justify-content: space-between;
@@ -319,7 +329,7 @@
       .workspace { display: grid; grid-template-columns: 1fr; gap: 12px; }
       .card { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
       .board-wrap { padding: 0; }
-      .coordinates { grid-template-columns: 20px repeat(6, 1fr); padding-bottom: 5px; }
+      .coordinates { grid-template-columns: 20px repeat(7, 1fr); padding-bottom: 5px; }
       .board-row { grid-template-columns: 20px 1fr; gap: 5px; }
       .board-row + .board-row { margin-top: 5px; }
       .grid { gap: 5px; }
@@ -390,13 +400,21 @@
           <h1 class="visually-hidden" id="board-title">Navigation grid</h1>
           <div class="board-wrap">
             <div class="coordinates" aria-hidden="true">
-              <span></span><span>A</span><span>B</span><span>C</span><span>D</span><span>E</span><span>F</span>
+              <span></span><span>A</span><span>B</span><span>C</span><span>D</span><span>E</span><span>F</span><span>G</span>
             </div>
-            <div id="board" role="grid" aria-label="Drone navigation grid, 6 rows by 6 columns"></div>
+            <div id="board" role="grid" aria-label="Drone navigation grid, 7 rows by 7 columns"></div>
           </div>
           <div class="board-footer">
-            <span id="position" aria-label="Position C3">C3</span>
+            <span id="position" aria-label="Position D4">D4</span>
             <span id="move-count" aria-label="Moves 0">0</span>
+          </div>
+          <div class="vision-panel" aria-label="Drone vision">
+            <p class="vision-status" id="vision-status" aria-live="polite"></p>
+            <div class="vision-legend" aria-label="Cell visibility legend">
+              <span class="legend-item"><span class="vision-swatch" aria-hidden="true"></span>Visible</span>
+              <span class="legend-item"><span class="vision-swatch remembered" aria-hidden="true"></span>Remembered</span>
+              <span class="legend-item"><span class="vision-swatch unknown" aria-hidden="true"></span>Unknown</span>
+            </div>
           </div>
         </section>
 
@@ -436,7 +454,7 @@
               <button type="submit">Send</button>
               <button class="stop-button" id="stop-button" type="button">Stop</button>
             </form>
-            <p class="command-help" id="command-help">Try “go all the way left”, “find the nearest wall”, “count how many walls there are”, “go to F6”, or “do a barrel roll”. Blue cells show the planned route.</p>
+            <p class="command-help" id="command-help">Try “go all the way left”, “find the nearest wall”, “what can you see?”, “go to G7”, or “do a barrel roll”. Blue cells show the planned route. The drone routes only around walls it has seen.</p>
           </section>
         </section>
       </div>
@@ -444,8 +462,7 @@
 
     <script>
       (() => {
-        const SIZE = 6;
-        const OBSTACLE_COUNT = 5;
+        const SIZE = 7;
         const board = document.querySelector("#board");
         const positionLabel = document.querySelector("#position");
         const moveCountLabel = document.querySelector("#move-count");
@@ -458,8 +475,11 @@
         const voicePreview = document.querySelector("#voice-preview");
         const OFFSETS = { up: [-1, 0], right: [0, 1], down: [1, 0], left: [0, -1] };
 
-        let drone = { row: 2, col: 2 };
+        let drone = { row: 3, col: 3 };
         let obstacles = new Set();
+        let knownObstacles = new Set();
+        let seenCells = new Set();
+        let visibleCells = new Set();
         let moveCount = 0;
         let navigating = false;
         let navigationVersion = 0;
@@ -480,12 +500,50 @@
           return `${row},${col}`;
         }
 
+        function hasLineOfSight(targetRow, targetCol) {
+          let x = drone.col;
+          let y = drone.row;
+          const dx = Math.abs(targetCol - x);
+          const sx = x < targetCol ? 1 : -1;
+          const dy = -Math.abs(targetRow - y);
+          const sy = y < targetRow ? 1 : -1;
+          let error = dx + dy;
+
+          while (x !== targetCol || y !== targetRow) {
+            const doubledError = 2 * error;
+            if (doubledError >= dy) {
+              error += dy;
+              x += sx;
+            }
+            if (doubledError <= dx) {
+              error += dx;
+              y += sy;
+            }
+            if ((x !== targetCol || y !== targetRow) && obstacles.has(key(y, x))) return false;
+          }
+          return true;
+        }
+
+        function updateVision() {
+          visibleCells = new Set();
+          for (let row = 0; row < SIZE; row += 1) {
+            for (let col = 0; col < SIZE; col += 1) {
+              if (!hasLineOfSight(row, col)) continue;
+              const location = key(row, col);
+              visibleCells.add(location);
+              seenCells.add(location);
+              if (obstacles.has(location)) knownObstacles.add(location);
+            }
+          }
+        }
+
         function setStatus(message, state = "idle") {
           statusMessage.textContent = message;
           status.dataset.state = state;
         }
 
         function renderBoard() {
+          updateVision();
           board.replaceChildren();
           for (let row = 0; row < SIZE; row += 1) {
             const rowElement = document.createElement("div");
@@ -504,18 +562,27 @@
               const cell = document.createElement("div");
               cell.className = "cell";
               cell.setAttribute("role", "gridcell");
-              cell.setAttribute("aria-label", `Row ${row + 1}, column ${String.fromCharCode(65 + col)}`);
-              if (plannedRoute.has(key(row, col))) cell.classList.add("route-cell");
-              if (goalKey === key(row, col)) cell.classList.add("goal-cell");
+              const location = key(row, col);
+              const columnName = String.fromCharCode(65 + col);
+              const visible = visibleCells.has(location);
+              const remembered = seenCells.has(location);
+              cell.setAttribute("aria-label", `${visible ? "Visible" : remembered ? "Remembered" : "Unknown"} cell at row ${row + 1}, column ${columnName}`);
+              if (!visible && remembered) cell.classList.add("remembered-cell");
+              if (!remembered) cell.classList.add("unknown-cell");
+              if (plannedRoute.has(location)) cell.classList.add("route-cell");
+              if (goalKey === location) cell.classList.add("goal-cell");
 
               if (drone.row === row && drone.col === col) {
                 cell.classList.add("drone-cell");
-                cell.setAttribute("aria-label", `Drone at row ${row + 1}, column ${String.fromCharCode(65 + col)}`);
+                cell.setAttribute("aria-label", `Drone at ${columnName}${row + 1}; current vision`);
                 cell.innerHTML = '<svg class="drone" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M24 16.5v15M16.5 24h15" stroke="#2563eb" stroke-width="3" stroke-linecap="round"/><path d="M20 20l-5-5m13 13 5 5m0-18-5 5m-8 8-5 5" stroke="#475467" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="5" fill="#fff" stroke="#2563eb" stroke-width="2"/><circle cx="36" cy="12" r="5" fill="#fff" stroke="#2563eb" stroke-width="2"/><circle cx="12" cy="36" r="5" fill="#fff" stroke="#2563eb" stroke-width="2"/><circle cx="36" cy="36" r="5" fill="#fff" stroke="#2563eb" stroke-width="2"/><circle cx="24" cy="24" r="5.5" fill="#2563eb"/><circle cx="24" cy="24" r="2" fill="#fff"/></svg>';
-              } else if (obstacles.has(key(row, col))) {
+              } else if (knownObstacles.has(location)) {
                 cell.classList.add("obstacle-cell");
-                cell.setAttribute("aria-label", `Obstacle at row ${row + 1}, column ${String.fromCharCode(65 + col)}`);
+                cell.setAttribute("aria-label", `${visible ? "Visible" : "Remembered"} wall at ${columnName}${row + 1}`);
+                if (!visible) cell.classList.add("remembered-obstacle-cell");
                 cell.innerHTML = '<span class="obstacle" aria-hidden="true">✳</span>';
+              } else if (remembered) {
+                cell.setAttribute("aria-label", `${visible ? "Visible" : "Remembered"} clear cell at ${columnName}${row + 1}`);
               }
               gridRow.append(cell);
             }
@@ -527,15 +594,25 @@
           moveCountLabel.textContent = String(moveCount);
           positionLabel.setAttribute("aria-label", `Position ${positionLabel.textContent}`);
           moveCountLabel.setAttribute("aria-label", `Moves ${moveCount}`);
+          const unknownCount = SIZE * SIZE - seenCells.size;
+          const rememberedWallCount = [...knownObstacles].filter((location) => !visibleCells.has(location)).length;
+          document.querySelector("#vision-status").textContent =
+            `Vision: ${visibleCells.size} visible cells · ${rememberedWallCount} remembered wall${rememberedWallCount === 1 ? "" : "s"} · ${unknownCount} unknown cells`;
         }
 
         function generateObstacles() {
           const patterns = [
+            [[0, 0], [1, 0], [2, 0]],
+            [[0, 0], [0, 1], [1, 1]],
+            [[0, 0], [1, 0], [1, 1], [2, 1]],
+            [[0, 1], [1, 0], [1, 1], [1, 2]],
+            [[0, 0], [0, 1], [1, 1], [1, 2]],
             [[0, 0], [1, 0], [2, 0], [2, 1], [2, 2]],
             [[0, 0], [0, 1], [1, 1], [1, 2], [2, 2]],
             [[0, 0], [0, 1], [0, 2], [1, 1], [2, 1]],
             [[0, 0], [1, 0], [1, 1], [2, 1], [2, 2]],
-            [[0, 1], [1, 0], [1, 1], [1, 2], [2, 1]]
+            [[0, 1], [1, 0], [1, 1], [1, 2], [2, 1]],
+            [[0, 0], [0, 1], [0, 2], [1, 2], [2, 2], [2, 1]]
           ];
 
           function connected(candidate) {
@@ -560,16 +637,14 @@
             return visited.size === SIZE * SIZE - candidate.size;
           }
 
-          for (let attempt = 0; attempt < 250; attempt += 1) {
+          function makeCluster(candidate) {
             const pattern = patterns[Math.floor(Math.random() * patterns.length)];
             const rotation = Math.floor(Math.random() * 4);
             const reflect = Math.random() < 0.5;
             const transformed = pattern.map(([originalRow, originalCol]) => {
               let row = originalRow;
               let col = reflect ? -originalCol : originalCol;
-              for (let turn = 0; turn < rotation; turn += 1) {
-                [row, col] = [col, -row];
-              }
+              for (let turn = 0; turn < rotation; turn += 1) [row, col] = [col, -row];
               return [row, col];
             });
             const minRow = Math.min(...transformed.map(([row]) => row));
@@ -578,41 +653,59 @@
             const maxCol = Math.max(...transformed.map(([, col]) => col));
             const offsetRow = Math.floor(Math.random() * (SIZE - (maxRow - minRow)));
             const offsetCol = Math.floor(Math.random() * (SIZE - (maxCol - minCol)));
-            const candidate = new Set(transformed.map(([row, col]) =>
+            const cluster = new Set(transformed.map(([row, col]) =>
               key(row - minRow + offsetRow, col - minCol + offsetCol)));
+            if ([...cluster].some((location) => candidate.has(location) || location === key(drone.row, drone.col))) return null;
+            return cluster;
+          }
 
-            if (candidate.has(key(drone.row, drone.col))) continue;
-
-            const extraCount = Math.floor(Math.random() * 3);
-            for (let extra = 0; extra < extraCount; extra += 1) {
-              const options = [];
-              for (let row = 0; row < SIZE; row += 1) {
-                for (let col = 0; col < SIZE; col += 1) {
-                  const location = key(row, col);
-                  if (location === key(drone.row, drone.col) || candidate.has(location)) continue;
-                  if ([[-1, 0], [1, 0], [0, -1], [0, 1]].some(([dr, dc]) =>
-                    candidate.has(key(row + dr, col + dc)))) options.push(location);
+          function growCluster(cluster, candidate, targetSize) {
+            while (cluster.size < targetSize) {
+              const options = new Set();
+              for (const location of cluster) {
+                const [row, col] = location.split(",").map(Number);
+                for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+                  const nextRow = row + dr;
+                  const nextCol = col + dc;
+                  const nextKey = key(nextRow, nextCol);
+                  if (inBounds(nextRow, nextCol) && !candidate.has(nextKey) &&
+                      !cluster.has(nextKey) && nextKey !== key(drone.row, drone.col)) options.add(nextKey);
                 }
               }
-              if (!options.length) break;
-              candidate.add(options[Math.floor(Math.random() * options.length)]);
+              if (!options.size) return false;
+              const optionsList = [...options];
+              cluster.add(optionsList[Math.floor(Math.random() * optionsList.length)]);
+            }
+            return true;
+          }
+
+          for (let attempt = 0; attempt < 400; attempt += 1) {
+            const targetCount = 9 + Math.floor(Math.random() * 5);
+            const clusterCount = targetCount >= 11 && Math.random() < 0.5 ? 3 : 2;
+            const sizes = Array.from({ length: clusterCount }, () => Math.floor(targetCount / clusterCount));
+            for (let index = 0; index < targetCount % clusterCount; index += 1) sizes[index] += 1;
+            const candidate = new Set();
+            let valid = true;
+
+            for (const targetSize of sizes) {
+              let cluster = null;
+              for (let placementAttempt = 0; placementAttempt < 40 && !cluster; placementAttempt += 1) {
+                cluster = makeCluster(candidate);
+              }
+              if (!cluster || cluster.size > targetSize || !growCluster(cluster, candidate, targetSize)) {
+                valid = false;
+                break;
+              }
+              for (const location of cluster) candidate.add(location);
             }
 
-            if (connected(candidate)) {
+            if (valid && connected(candidate)) {
               obstacles = candidate;
               return;
             }
           }
 
           obstacles = new Set();
-          while (obstacles.size < OBSTACLE_COUNT) {
-            const row = Math.floor(Math.random() * SIZE);
-            const col = Math.floor(Math.random() * SIZE);
-            const location = key(row, col);
-            if (location === key(drone.row, drone.col)) continue;
-            obstacles.add(location);
-            if (obstacles.size === OBSTACLE_COUNT && !connected(obstacles)) obstacles.delete(location);
-          }
         }
 
         function move(direction) {
@@ -642,25 +735,35 @@
           return true;
         }
 
-        async function moveAlong(route, finalStatus = null) {
+        async function moveAlong(route, finalStatus = null, targetKey = null) {
           const version = navigationVersion;
           navigating = true;
           setArrowControlsDisabled(true);
-          let row = drone.row;
-          let col = drone.col;
-          plannedRoute = new Set(route.map((direction) => {
-            const [dr, dc] = OFFSETS[direction];
-            row += dr;
-            col += dc;
-            return key(row, col);
-          }));
-          goalKey = key(row, col);
-          renderBoard();
+          let currentRoute = route;
+          let routeIndex = 0;
+          goalKey = targetKey;
           try {
-            for (const direction of route) {
+            while (targetKey ? key(drone.row, drone.col) !== targetKey : routeIndex < currentRoute.length) {
               if (version !== navigationVersion) return false;
+              if (targetKey) {
+                currentRoute = reconstructRoute(dijkstra(), targetKey);
+                if (currentRoute === null) return false;
+                routeIndex = 0;
+              }
+              let row = drone.row;
+              let col = drone.col;
+              plannedRoute = new Set(currentRoute.slice(routeIndex).map((direction) => {
+                const [dr, dc] = OFFSETS[direction];
+                row += dr;
+                col += dc;
+                return key(row, col);
+              }));
+              if (!targetKey) goalKey = key(row, col);
+              renderBoard();
+              const direction = currentRoute[routeIndex];
               plannedRoute.delete(key(drone.row, drone.col));
               if (!move(direction)) return false;
+              routeIndex += 1;
               await new Promise((resolve) => window.setTimeout(resolve, 220));
             }
             if (version !== navigationVersion) return false;
@@ -726,7 +829,7 @@
             setStatus("Stopped", listening ? "listening" : "idle");
             addMessage("Drone", `Stopped at ${positionLabel.textContent}. Pending commands cleared.`);
           } else if (!commands.length) {
-            addMessage("Drone", "I didn't understand that command. Try a direction, a destination like F6, finding or counting walls, or a barrel roll.");
+            addMessage("Drone", "I didn't understand that command. Try “go left”, a destination like G7, “what can you see?”, finding or counting walls, or a barrel roll.");
           } else {
             const reply = addMessage("Drone", processingCommands ? "Queued. Waiting for the current command…" : "Working on it…");
             commandQueue.push({ commands, reply, version: navigationVersion });
@@ -742,17 +845,15 @@
         }
 
         function directionForWord(word) {
-          const soundAlikes = {
-            left: ["left", "lef", "lift", "west", "westward"],
-            right: ["right", "righ", "rite", "write", "wright", "wight", "light", "east", "eastward"],
-            up: ["up", "upp", "app", "north", "northward"],
-            down: ["down", "doun", "dawn", "don", "town", "south", "southward"]
+          const directions = {
+            left: ["left", "west", "westward"],
+            right: ["right", "east", "eastward"],
+            up: ["up", "north", "northward"],
+            down: ["down", "south", "southward"]
           };
 
-          for (const [direction, alternatives] of Object.entries(soundAlikes)) {
-            if (alternatives.includes(word)) return direction;
-          }
-          return null;
+          const match = Object.entries(directions).find(([, alternatives]) => alternatives.includes(word));
+          return match ? match[0] : null;
         }
 
         function ordinalValue(word) {
@@ -762,7 +863,8 @@
             third: 3, three: 3, "3": 3, "3rd": 3,
             fourth: 4, four: 4, "4": 4, "4th": 4,
             fifth: 5, five: 5, "5": 5, "5th": 5,
-            sixth: 6, six: 6, "6": 6, "6th": 6
+            sixth: 6, six: 6, "6": 6, "6th": 6,
+            seventh: 7, seven: 7, "7": 7, "7th": 7
           };
           return ordinals[word] || null;
         }
@@ -771,12 +873,12 @@
           const text = transcript.toLowerCase()
             .replace(/\b(north|south)(east|west)\b/g, "$1 $2")
             .replace(/[,-]/g, " ");
-          const ordinalPattern = "(first|one|1st|1|second|two|2nd|2|third|three|3rd|3|fourth|four|4th|4|fifth|five|5th|5|sixth|six|6th|6)";
+          const ordinalPattern = "(first|one|1st|1|second|two|2nd|2|third|three|3rd|3|fourth|four|4th|4|fifth|five|5th|5|sixth|six|6th|6|seventh|seven|7th|7)";
           const rowWord = /\b(top|upper|north|bottom|lower|south)\b/;
           const columnWord = /\b(left|west|right|east)\b/;
           const rowMatch = text.match(rowWord);
           const columnMatch = text.match(columnWord);
-          const coordinate = text.match(/\b([a-f])\s*([1-6])\b/);
+          const coordinate = text.match(/\b([a-g])\s*([1-7])\b/);
           if (coordinate) return { row: Number(coordinate[2]) - 1, col: coordinate[1].charCodeAt(0) - 97 };
           if (/\b[a-z]\s*\d+\b/.test(text)) return null;
 
@@ -786,7 +888,9 @@
               col: /left|west/.test(columnMatch[1]) ? 0 : SIZE - 1
             };
           }
-          if (/\b(center|centre|middle)\b/.test(text)) return { row: 2, col: 2 };
+          if (/\b(center|centre|middle)\b/.test(text)) {
+            return { row: Math.floor(SIZE / 2), col: Math.floor(SIZE / 2) };
+          }
 
           const rowOrdinal = text.match(new RegExp(`\\b(?:row|line)\\s+(?:number\\s+)?${ordinalPattern}\\b`)) ||
             text.match(new RegExp(`\\b${ordinalPattern}\\s+(?:row|line)\\b`));
@@ -839,22 +943,26 @@
 
         function parseVoiceCommands(transcript) {
           const text = transcript.toLowerCase().replace(/[’]/g, "'").trim();
-          if (/\b(don't|do not|never)\b/.test(text)) return [];
-          const clauses = text.split(/\b(?:and\s+then|then|afterwards|followed\s+by)\b|\band\s+(?=(?:go|move|fly|head|do|perform|find|count|turn)\b)/).filter((part) => part.trim());
+          if (/\b(?:don't|do not|not|never)\b/.test(text)) return [];
+          const clauses = text.split(/\b(?:and\s+then|then|afterwards|followed\s+by)\b|\band\s+(?=(?:go|move|fly|head|do|perform|find|count|turn|look|scan|describe|report)\b)/).filter((part) => part.trim());
           if (clauses.length > 1) {
             const commands = clauses.map(parseVoiceCommands);
             // Reject an incomplete sequence rather than silently executing only part of it.
             return commands.every((part) => part.length) ? commands.flat() : [];
           }
           if (/^(?:please\s+)?(?:stop|halt|cancel)(?:\s+(?:now|please|moving|everything|all|commands|the drone))*[.!?]*$/.test(text)) return [{ type: "stop" }];
+          if (/\b(?:what (?:can|do) you see|what is visible|describe (?:your )?(?:view|surroundings)|look around|scan (?:the )?(?:area|surroundings)|report (?:your )?vision)\b/.test(text)) {
+            return [{ type: "vision-report" }];
+          }
           if (/\b(?:count|how many|number of)\b/.test(text) && /\b(?:walls?|obstacles?|blocks?)\b/.test(text)) return [{ type: "count-walls" }];
           if (/\b(?:nearest|closest)\b/.test(text) && /\b(?:wall|obstacle|block)\b/.test(text)) return [{ type: "nearest-wall" }];
           if (/\bbarrel\s+roll\b/.test(text)) return [{ type: "barrel-roll" }];
           const words = text.match(/\b[a-z0-9]+(?:st|nd|rd|th)?\b/g) || [];
           const directions = words.map(directionForWord).filter(Boolean);
-          const continueUntilBlocked = /\b(until|till|til)\b/.test(text) || /\b(?:wall|obstacle|block|blocked)\b/.test(text);
+          const continueUntilBlocked = /\b(?:until|till|til)\b/.test(text) ||
+            /\b(?:to|before)\s+(?:the\s+)?(?:wall|obstacle|block)\b/.test(text);
           if (continueUntilBlocked && directions.length) {
-            return [{ type: "until-blocked", direction: directions[directions.length - 1] }];
+            return directions.length === 1 ? [{ type: "until-blocked", direction: directions[0] }] : [];
           }
 
           if (directions.length === 1 && /\b(?:all the way|as far as|to the very|to the far|edge|side|end)\b/.test(text) &&
@@ -863,7 +971,7 @@
           }
 
           const amount = words.map(ordinalValue).find(Boolean);
-          if (directions.length === 1 && amount && /\b(one|two|three|four|five|six|[1-6])\b/.test(text) &&
+          if (directions.length === 1 && amount && /\b(one|two|three|four|five|six|seven|[1-7])\b/.test(text) &&
               /\b(steps?|spaces?|cells?|squares?|spots?|times)\b/.test(text) &&
               !/\b(corner|row|column|col|top|bottom|on|at)\b/.test(text)) {
             return [{ type: "direction", direction: directions[0], steps: amount }];
@@ -877,7 +985,11 @@
 
           if (/\b[a-z]\s*\d+\b/.test(text)) return [];
           if (/\b\d+\b/.test(text) && !amount) return [];
-          return directions.map((direction) => ({ type: "direction", direction, steps: amount || 1 }));
+          const movementIntent = /\b(?:go|move|fly|head|travel|navigate|proceed|turn)\b/.test(text);
+          const directionOnly = words.length === 1 && directions.length === 1;
+          if (!movementIntent && !directionOnly) return [];
+          if (directions.length !== 1) return [];
+          return [{ type: "direction", direction: directions[0], steps: amount || 1 }];
         }
 
         function rowMatchForDestination(text) {
@@ -915,7 +1027,7 @@
               const nextRow = row + dr;
               const nextCol = col + dc;
               const nextKey = key(nextRow, nextCol);
-              if (!inBounds(nextRow, nextCol) || obstacles.has(nextKey) || settled.has(nextKey)) continue;
+              if (!inBounds(nextRow, nextCol) || knownObstacles.has(nextKey) || settled.has(nextKey)) continue;
               const distance = current.distance + 1;
               if (distance >= (distances.get(nextKey) ?? Infinity)) continue;
               distances.set(nextKey, distance);
@@ -944,32 +1056,48 @@
           const destination = description === positionName(targetKey) ? description : `${description} at ${positionName(targetKey)}`;
           if (!route.length) return `Already at ${destination}.`;
           if (activeJob) updateReply(activeJob.reply, `Navigating to ${description}: shortest path is ${route.length} move${route.length === 1 ? "" : "s"}. Avoiding walls automatically.`);
-          const completed = await moveAlong(route, positionName(targetKey));
-          return completed ? `Reached ${destination} in ${route.length} move${route.length === 1 ? "" : "s"} using the shortest clear path.` : "Movement cancelled.";
+          const startingMoveCount = moveCount;
+          const completed = await moveAlong(route, positionName(targetKey), targetKey);
+          if (!completed) {
+            if (knownObstacles.has(targetKey)) return `${positionName(targetKey)} is a wall in my current vision. Choose a clear destination.`;
+            return `I can't reach ${destination} using the walls currently known to me.`;
+          }
+          const moves = moveCount - startingMoveCount;
+          return `Reached ${destination} in ${moves} move${moves === 1 ? "" : "s"} using the shortest path known from my current vision.`;
         }
 
         async function moveToDestination(row, col) {
           if (!inBounds(row, col)) return "That destination is outside the grid. Use columns A–F and rows 1–6.";
           const targetKey = key(row, col);
-          if (obstacles.has(targetKey)) return `${positionName(targetKey)} contains a wall. Choose a clear destination, or ask me to find the nearest wall.`;
+          if (knownObstacles.has(targetKey)) return `${positionName(targetKey)} is a wall in my current vision. Choose a clear destination, or ask me to find the nearest wall.`;
           return navigateTo(targetKey);
         }
 
         async function moveToEdge(direction) {
-          const search = dijkstra();
-          const candidates = [...search.distances.keys()].filter((location) => {
-            const [row, col] = location.split(",").map(Number);
-            return direction === "left" ? col === 0 : direction === "right" ? col === SIZE - 1 : direction === "up" ? row === 0 : row === SIZE - 1;
-          });
-          candidates.sort((a, b) => search.distances.get(a) - search.distances.get(b));
-          if (!candidates.length) return `I can't reach the ${direction} edge. Walls block every route.`;
-          return navigateTo(candidates[0], search, `the ${direction} edge`);
+          const version = navigationVersion;
+          while (version === navigationVersion) {
+            const search = dijkstra();
+            const candidates = [...search.distances.keys()].filter((location) => {
+              const [row, col] = location.split(",").map(Number);
+              return direction === "left" ? col === 0 : direction === "right" ? col === SIZE - 1 : direction === "up" ? row === 0 : row === SIZE - 1;
+            });
+            candidates.sort((a, b) => search.distances.get(a) - search.distances.get(b));
+            if (!candidates.length) return `I can't reach the ${direction} edge using the walls currently known to me.`;
+            const target = candidates[0];
+            const result = await navigateTo(target, search, `the ${direction} edge`);
+            if (version !== navigationVersion) return result;
+            if (key(drone.row, drone.col) === target) return result;
+            const updatedSearch = dijkstra();
+            if (knownObstacles.has(target) || !updatedSearch.distances.has(target)) continue;
+            return result;
+          }
+          return "Movement cancelled.";
         }
 
         function countWalls() {
-          const remaining = new Set(obstacles);
+          const remaining = new Set(knownObstacles);
           let count = 0;
-          for (const location of obstacles) {
+          for (const location of knownObstacles) {
             if (!remaining.delete(location)) continue;
             count += 1;
             const stack = [location];
@@ -985,11 +1113,11 @@
         }
 
         async function findNearestWall() {
-          if (!obstacles.size) return "There are no walls on this grid.";
+          if (!knownObstacles.size) return "I haven't seen any walls yet. Unknown cells may still contain walls.";
           const search = dijkstra();
           let nearest = null;
           let distance = Infinity;
-          for (const wall of obstacles) {
+          for (const wall of knownObstacles) {
             const [row, col] = wall.split(",").map(Number);
             for (const [dr, dc] of Object.values(OFFSETS)) {
               const location = key(row + dr, col + dc);
@@ -1023,7 +1151,7 @@
               stopStatus = "Edge";
               break;
             }
-            if (obstacles.has(key(nextRow, nextCol))) break;
+            if (knownObstacles.has(key(nextRow, nextCol))) break;
             route.push(direction);
             row = nextRow;
             col = nextCol;
@@ -1041,7 +1169,12 @@
             return findNearestWall();
           } else if (command.type === "count-walls") {
             const count = countWalls();
-            return `I count ${count} connected wall${count === 1 ? "" : "s"}, covering ${obstacles.size} blocked cells. Cells sharing a side form one wall; grid boundaries aren't counted.`;
+            return `I know of ${count} connected wall${count === 1 ? "" : "s"}, covering ${knownObstacles.size} seen wall cell${knownObstacles.size === 1 ? "" : "s"}. Cells sharing a side form one wall; unknown areas may contain more.`;
+          } else if (command.type === "vision-report") {
+            const visibleWallCount = [...visibleCells].filter((location) => knownObstacles.has(location)).length;
+            const rememberedWallCount = knownObstacles.size - visibleWallCount;
+            const unknownCount = SIZE * SIZE - seenCells.size;
+            return `I can currently see ${visibleCells.size} cells, including ${visibleWallCount} wall${visibleWallCount === 1 ? "" : "s"}. I remember ${rememberedWallCount} wall${rememberedWallCount === 1 ? "" : "s"} outside my current view; ${unknownCount} cell${unknownCount === 1 ? " is" : "s are"} still unknown.`;
           } else if (command.type === "barrel-roll") {
             const version = navigationVersion;
             navigating = true;
@@ -1239,17 +1372,20 @@
         document.querySelector("#stop-button").addEventListener("click", () => submitCommand("stop", "button"));
         document.querySelector("#reset-button").addEventListener("click", () => {
           cancelCommands("Cancelled because the grid was regenerated.");
-          drone = { row: 2, col: 2 };
+          drone = { row: 3, col: 3 };
           moveCount = 0;
+          knownObstacles = new Set();
+          seenCells = new Set();
+          visibleCells = new Set();
           generateObstacles();
           renderBoard();
           setStatus("Ready");
-          addMessage("Drone", "New grid ready. Position reset to C3 and move count reset to zero.");
+          addMessage("Drone", "New grid ready. Position reset to D4, move count reset, and vision memory cleared.");
         });
 
         generateObstacles();
         renderBoard();
-        addMessage("Drone", "Ready at C3. Type or say a command. I can navigate around walls, find or count them, and do a barrel roll. Say ‘stop’ or press Stop to cancel movement.");
+        addMessage("Drone", "Ready at D4. I only know what I can see or remember; hidden cells stay unknown. Type or say a command such as “go to G7” or “what can you see?”. Say “stop” or press Stop to cancel movement.");
       })();
     </script>
   </body>
