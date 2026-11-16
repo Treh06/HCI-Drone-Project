@@ -12,8 +12,11 @@
         const historyList = document.querySelector("#history-list");
         const commandInput = document.querySelector("#command-input");
         const voicePreview = document.querySelector("#voice-preview");
-        const OFFSETS = { up: [-1, 0], right: [0, 1], down: [1, 0], left: [0, -1] };
-        if (IS_3D) Object.assign(OFFSETS, { ascend: [0, 0, 1], descend: [0, 0, -1] });
+        // The 3D drone holds a fixed north-facing heading. Camera rotation only
+        // changes the view; forward/backward stay aligned with the map rows.
+        const OFFSETS = IS_3D
+          ? { forward: [-1, 0, 0], right: [0, 1, 0], backward: [1, 0, 0], left: [0, -1, 0], up: [0, 0, 1], down: [0, 0, -1] }
+          : { up: [-1, 0], right: [0, 1], down: [1, 0], left: [0, -1] };
 
         let drone = { row: 3, col: 3, level: 0 };
         let obstacles = new Set();
@@ -139,16 +142,14 @@
             return destination.length === 1 && destination[0].type === "destination"
               ? [{ ...destination[0], level: number - 1 }] : [];
           }
-          if (/\b(?:ceiling|highest level)\b/.test(text)) return [{ type: "edge", direction: "ascend" }];
-          if (/\b(?:floor|ground|lowest level)\b/.test(text)) return [{ type: "edge", direction: "descend" }];
-          // Keep legacy “up” / “down” as north / south. Altitude uses explicit verbs,
-          // or “fly up/down N levels”, so old voice commands retain their meaning.
+          if (/\b(?:ceiling|highest level)\b/.test(text)) return [{ type: "edge", direction: "up" }];
+          if (/\b(?:floor|ground|lowest level)\b/.test(text)) return [{ type: "edge", direction: "down" }];
           if (/\blevels?\b/.test(text)) {
             const words = text.match(/\b[a-z0-9]+\b/g) || [];
             const directions = words.map(directionForWord).filter(Boolean);
             const steps = words.map(ordinalValue).find(Boolean);
             if (directions.length !== 1 || !steps || steps >= LEVELS) return [];
-            const direction = { up: "ascend", down: "descend", ascend: "ascend", descend: "descend" }[directions[0]];
+            const direction = ["up", "down"].includes(directions[0]) ? directions[0] : null;
             return direction ? [{ type: "direction", direction, steps }] : [];
           }
           if (/\b(?:layer|altitude)\b/.test(text)) return [];
@@ -238,7 +239,7 @@
                 if (occupied) {
                   const model = document.createElement("div");
                   model.className = "drone drone-model";
-                  model.innerHTML = '<span class="drone-arm arm-one"></span><span class="drone-arm arm-two"></span><span class="drone-body"></span><span class="rotor rotor-one"></span><span class="rotor rotor-two"></span><span class="rotor rotor-three"></span><span class="rotor rotor-four"></span>';
+                  model.innerHTML = '<span class="drone-arm arm-one"></span><span class="drone-arm arm-two"></span><span class="drone-body"></span><span class="rotor rotor-one"></span><span class="rotor rotor-two"></span><span class="rotor rotor-three"></span><span class="rotor rotor-four"></span><span class="drone-heading-arrow"></span>';
                   cell.append(model);
                 }
                 slice.append(cell);
@@ -246,8 +247,8 @@
                   const button = document.createElement("button");
                   button.type = "button";
                   button.className = `map-cell ${state}`;
-                  button.textContent = occupied ? "✥" : wall ? "■" : !seen ? "?" : goal ? "◎" : route ? "·" : "";
-                  button.setAttribute("aria-label", `${positionName(location)}: ${occupied ? "drone" : `${visible ? "visible" : seen ? "remembered" : "unknown"} ${wall ? "wall" : "air"}`}. Navigate here.`);
+                  button.textContent = occupied ? "↑" : wall ? "■" : !seen ? "?" : goal ? "◎" : route ? "·" : "";
+                  button.setAttribute("aria-label", `${positionName(location)}: ${occupied ? "drone facing north; forward toward row 1" : `${visible ? "visible" : seen ? "remembered" : "unknown"} ${wall ? "wall" : "air"}`}. Navigate here.`);
                   button.disabled = wall;
                   button.addEventListener("click", () => submitCommand(`go to ${String.fromCharCode(65 + col)}${row + 1} level ${level + 1}`, "map"));
                   layerMap.append(button);
@@ -589,8 +590,10 @@
             down: ["down", "south", "southward"]
           };
           if (IS_3D) Object.assign(directions, {
-            ascend: ["ascend", "rise", "climb", "higher"],
-            descend: ["descend", "lower", "sink"]
+            up: ["up", "upward", "upwards", "ascend", "rise", "climb", "higher"],
+            down: ["down", "downward", "downwards", "descend", "lower", "sink"],
+            forward: ["forward", "forwards", "north", "northward"],
+            backward: ["backward", "backwards", "back", "south", "southward"]
           });
 
           const match = Object.entries(directions).find(([, alternatives]) => alternatives.includes(word));
@@ -711,7 +714,8 @@
           }
 
           if (directions.length === 1 && /\b(?:all the way|as far as|to the very|to the far|edge|side|end)\b/.test(text) &&
-              !/\b(corner|row|column|col|space|cell|square|spot)\b/.test(text)) {
+              !/\b(corner|row|column|col|space|cell|square|spot)\b/.test(text) &&
+              !(rowMatchForDestination(text) && columnMatchForDestination(text))) {
             return [{ type: "edge", direction: directions[0] }];
           }
 
@@ -823,9 +827,10 @@
             const search = dijkstra();
             const candidates = [...search.distances.keys()].filter((location) => {
               const { row, col, level } = coordinates(location);
-              if (direction === "ascend") return level === LEVELS - 1;
-              if (direction === "descend") return level === 0;
-              return direction === "left" ? col === 0 : direction === "right" ? col === SIZE - 1 : direction === "up" ? row === 0 : row === SIZE - 1;
+              const [dr, dc, dl = 0] = OFFSETS[direction];
+              if (dl) return level === (dl > 0 ? LEVELS - 1 : 0);
+              if (dr) return row === (dr > 0 ? SIZE - 1 : 0);
+              return col === (dc > 0 ? SIZE - 1 : 0);
             });
             candidates.sort((a, b) => search.distances.get(a) - search.distances.get(b));
             if (!candidates.length) return `I can't reach the ${direction} edge using the walls currently known to me.`;
@@ -1126,5 +1131,5 @@
         if (IS_3D) initializeSpatialControls();
         generateObstacles();
         renderBoard();
-        addMessage("Drone", `Ready at ${positionLabel.textContent}. I only know what I can see or remember; hidden cells stay unknown. Type or say a command such as “go to G7” or “what can you see?”. ${IS_3D ? 'Use “ascend”, “descend”, or “go to G7 level 3” to fly between altitudes. ' : ''}Say “stop” or press Stop to cancel movement.`);
+        addMessage("Drone", `Ready at ${positionLabel.textContent}. I only know what I can see or remember; hidden cells stay unknown. Type or say a command such as “go to G7” or “what can you see?”. ${IS_3D ? 'Facing north: “forward” moves toward row 1, “backward” toward row 7. “Up” and “down” change altitude; “ascend” and “descend” also work. Routes can climb or descend around walls. ' : ''}Say “stop” or press Stop to cancel movement.`);
       })();

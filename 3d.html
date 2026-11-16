@@ -25,7 +25,7 @@
         <section class="scene-card" aria-labelledby="board-title">
           <div class="card-heading"><div><h2 id="board-title">Live airspace</h2><p>Blue trails trace the route the drone currently knows.</p></div><span class="live-badge">3D</span></div>
           <div class="scene-viewport" id="scene" style="--yaw:-35deg;--tilt:58deg;--zoom:.85">
-            <div class="scene-hud"><span>ALTITUDE <strong id="altitude">L1 / 4</strong></span><span>N ↑ · E → <small>before camera rotation</small></span></div>
+            <div class="scene-hud"><span>ALTITUDE <strong id="altitude">L1 / 4</strong></span><span class="heading-hud">FACING <strong>↑ North</strong><small>Forward → row 1 · Backward → row 7</small></span></div>
             <div class="scene-center"><div id="board" class="spatial-board" aria-hidden="true"></div></div>
             <div class="scene-caption">4 altitude layers · 196 flight cells</div>
           </div>
@@ -47,22 +47,22 @@
             <div class="layer-picker"><label for="view-level">Inspect altitude</label><select id="view-level"><option value="0">Level 1 · ground</option><option value="1">Level 2</option><option value="2">Level 3</option><option value="3">Level 4 · ceiling</option></select></div>
             <div class="map-columns" aria-hidden="true"><span>A</span><span>B</span><span>C</span><span>D</span><span>E</span><span>F</span><span>G</span></div>
             <div class="layer-map-wrap"><div class="map-rows" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span></div><div id="layer-map" class="layer-map" role="group" aria-label="Inspected altitude map; select a cell to route there"></div></div>
-            <p class="hint">Select a cell to fly there. The map follows the drone as it moves. Inspecting a layer does not reveal hidden cells.</p>
+            <p class="hint">↑ marks the drone’s nose: it always faces map north (row 1). Select a cell to fly there; routes can climb or descend around walls. The map follows the drone as it moves.</p>
           </section>
           <section class="panel controls" aria-label="Flight controls">
             <h2>Flight controls</h2>
             <div class="manual-controls">
               <div class="dpad" aria-label="Horizontal movement">
-                <button class="arrow" type="button" data-direction="up" aria-label="Move north" title="North (up)">↑</button>
-                <button class="arrow" type="button" data-direction="left" aria-label="Move west" title="West (left)">←</button>
-                <button class="arrow" type="button" data-direction="down" aria-label="Move south" title="South (down)">↓</button>
-                <button class="arrow" type="button" data-direction="right" aria-label="Move east" title="East (right)">→</button>
+                <button class="arrow" type="button" data-direction="forward" aria-label="Move forward toward row 1" title="Forward (north)">↑<span>Forward</span></button>
+                <button class="arrow" type="button" data-direction="left" aria-label="Move left toward column A" title="Left (west)">←<span>Left</span></button>
+                <button class="arrow" type="button" data-direction="backward" aria-label="Move backward toward row 7" title="Backward (south)">↓<span>Backward</span></button>
+                <button class="arrow" type="button" data-direction="right" aria-label="Move right toward column G" title="Right (east)">→<span>Right</span></button>
               </div>
-              <div class="altitude-controls"><button class="arrow" type="button" data-direction="ascend">↥ Ascend</button><button class="arrow" type="button" data-direction="descend">↧ Descend</button></div>
+              <div class="altitude-controls"><button class="arrow" type="button" data-direction="up" aria-label="Move up one altitude level">↥ Up</button><button class="arrow" type="button" data-direction="down" aria-label="Move down one altitude level">↧ Down</button></div>
             </div>
             <div class="voice-controls"><button class="voice-button" id="listen-button" type="button" aria-label="Start listening" aria-pressed="false"><span aria-hidden="true">◉</span> <span id="listen-label">Start listening</span></button><div class="status" id="status" data-state="idle" role="status" aria-live="polite"><i></i><span id="status-message">Off</span></div></div>
             <button class="reset-button" id="reset-button" type="button">↻ Regenerate 3D airspace</button>
-            <p class="hint">“Up” and “down” still mean north and south. Use “ascend” and “descend” for altitude.</p>
+            <p class="hint">“Up” / “down” change altitude. “Forward” / “backward” move north / south; “left” / “right” move west / east. The drone keeps facing north, even when you orbit the camera.</p>
           </section>
         </aside>
         <section class="panel history" aria-labelledby="chat-title">
@@ -74,7 +74,7 @@
             <input id="command-input" name="command" placeholder="Try “go to G7 level 3”…" autocomplete="off" maxlength="500" required aria-describedby="command-help">
             <button type="submit">Send ↗</button><button class="stop-button" id="stop-button" type="button">Stop</button>
           </form>
-          <p class="command-help" id="command-help">All 2D commands work here: destinations, edges, step counts, wall finding and counting, vision reports, sequences, stop, and barrel rolls. Add “ascend two levels”, “go to level 4”, or “go to G7 level 3”. Destinations without a level use the current altitude. Routing can detour across all four levels, using only observed walls.</p>
+          <p class="command-help" id="command-help">Try “move up”, “go backward two cells”, “go to the top right of the map”, “go to G7 level 3”, or “forward then up”. Destinations, edges, step counts, wall finding and counting, vision reports, stop, and barrel rolls all work. “Ascend” / “descend” remain altitude aliases. Map destinations finish at the current altitude unless you specify a level; smart routing can fly up and down along the way, using only observed walls.</p>
         </section>
       </div>
     </main>

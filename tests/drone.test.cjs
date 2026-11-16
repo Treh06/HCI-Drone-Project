@@ -25,7 +25,7 @@ function createApp(walls = [], position = { row: 2, col: 2 }, spatial = false) {
     get textContent() { return this._text + this.children.map((child) => child.textContent).join(''); }
   }
   const elements = new Map();
-  const arrows = ['up', 'right', 'down', 'left', ...(spatial ? ['ascend', 'descend'] : [])].map((direction) => {
+  const arrows = (spatial ? ['forward', 'right', 'backward', 'left', 'up', 'down'] : ['up', 'right', 'down', 'left']).map((direction) => {
     const element = new Element();
     element.dataset.direction = direction;
     return element;
@@ -87,9 +87,10 @@ function createApp(walls = [], position = { row: 2, col: 2 }, spatial = false) {
     api, elements, recognitions, arrows,
     parse: (text) => JSON.parse(JSON.stringify(api.parseVoiceCommands(text))),
     messages: () => document.querySelector('#history-list').children.map((entry) => entry.textContent),
-    async flush() {
+    async flush(onTick = () => {}) {
       for (let iteration = 0; iteration < 300; iteration++) {
         await new Promise(setImmediate);
+        onTick(api.state());
         const next = [...timers].find(([, timer]) => timer.delay <= 850);
         if (next) { timers.delete(next[0]); next[1].callback(); }
         else if (!api.state().processingCommands) return;
@@ -340,29 +341,41 @@ test('chat renders command text as text, including unrecognized input', () => {
 
 const createSpatialApp = (walls = [], position = { row: 2, col: 2, level: 0 }) => createApp(walls, position, true);
 
-test('3D retains the entire legacy command vocabulary and adds explicit altitude commands', () => {
+test('3D retains map commands and uses up/down for altitude with forward/backward for map movement', () => {
   const flat = createApp();
   const spatial = createSpatialApp();
   for (const phrase of [
-    'go left', 'move three cells right', 'go all the way north', 'right until a wall',
+    'go left', 'move three cells right', 'right until a wall',
     'go to G7', 'go to the southwest corner', 'go to the center',
     'row three column two', 'take the second spot on top', 'go to the seventh spot on the bottom',
     'find the nearest wall', 'count walls', 'what can you see', 'do a barrel roll', 'stop',
     'go left then do a barrel roll', 'hello drone', "don't go right", 'move up and right', 'go to H8',
   ]) assert.deepEqual(spatial.parse(phrase), flat.parse(phrase), phrase);
-  for (const phrase of ['ascend', 'climb', 'go higher']) {
-    assert.deepEqual(spatial.parse(phrase), [{ type: 'direction', direction: 'ascend', steps: 1 }]);
+  for (const phrase of ['up', 'move up', 'ascend', 'climb', 'go higher']) {
+    assert.deepEqual(spatial.parse(phrase), [{ type: 'direction', direction: 'up', steps: 1 }]);
   }
-  assert.deepEqual(spatial.parse('descend two levels'), [{ type: 'direction', direction: 'descend', steps: 2 }]);
-  assert.deepEqual(spatial.parse('fly up two levels'), [{ type: 'direction', direction: 'ascend', steps: 2 }]);
+  for (const phrase of ['down', 'move down', 'descend', 'go lower']) {
+    assert.deepEqual(spatial.parse(phrase), [{ type: 'direction', direction: 'down', steps: 1 }]);
+  }
+  for (const phrase of ['forward', 'go forwards', 'move north']) {
+    assert.deepEqual(spatial.parse(phrase), [{ type: 'direction', direction: 'forward', steps: 1 }]);
+  }
+  for (const phrase of ['backward', 'go backwards', 'move back', 'go south']) {
+    assert.deepEqual(spatial.parse(phrase), [{ type: 'direction', direction: 'backward', steps: 1 }]);
+  }
+  assert.deepEqual(spatial.parse('go all the way north'), [{ type: 'edge', direction: 'forward' }]);
+  assert.deepEqual(spatial.parse('go all the way up'), [{ type: 'edge', direction: 'up' }]);
+  assert.deepEqual(spatial.parse('move backward two cells'), [{ type: 'direction', direction: 'backward', steps: 2 }]);
+  assert.deepEqual(spatial.parse('descend two levels'), [{ type: 'direction', direction: 'down', steps: 2 }]);
+  assert.deepEqual(spatial.parse('fly up two levels'), [{ type: 'direction', direction: 'up', steps: 2 }]);
   assert.deepEqual(spatial.parse('go to G7 level three'), [{ type: 'destination', row: 6, col: 6, level: 2 }]);
   assert.deepEqual(spatial.parse('go to row three column two at level 4'), [{ type: 'destination', row: 2, col: 1, level: 3 }]);
   assert.deepEqual(spatial.parse('go to D4 L2'), [{ type: 'destination', row: 3, col: 3, level: 1 }]);
   assert.deepEqual(spatial.parse('go to level 4'), [{ type: 'altitude', level: 3 }]);
-  assert.deepEqual(spatial.parse('ascend one level'), [{ type: 'direction', direction: 'ascend', steps: 1 }]);
-  assert.deepEqual(spatial.parse('go to the ceiling'), [{ type: 'edge', direction: 'ascend' }]);
-  assert.deepEqual(spatial.parse('go to the ground'), [{ type: 'edge', direction: 'descend' }]);
-  assert.deepEqual(spatial.parse('ascend then go right then descend').map((command) => command.direction), ['ascend', 'right', 'descend']);
+  assert.deepEqual(spatial.parse('ascend one level'), [{ type: 'direction', direction: 'up', steps: 1 }]);
+  assert.deepEqual(spatial.parse('go to the ceiling'), [{ type: 'edge', direction: 'up' }]);
+  assert.deepEqual(spatial.parse('go to the ground'), [{ type: 'edge', direction: 'down' }]);
+  assert.deepEqual(spatial.parse('ascend then go right then descend').map((command) => command.direction), ['up', 'right', 'down']);
   for (const phrase of ['go to G7 level 0', 'go to G7 level 5', 'go to H8 level 3', 'ascend 99 levels', 'go to level -1', 'go to G7 level 2 level 3', 'go right level 3']) {
     assert.deepEqual(spatial.parse(phrase), [], phrase);
   }
@@ -374,11 +387,67 @@ test('3D Dijkstra takes a shorter vertical detour around a wall spanning a layer
   app.api.setWorld(walls, { row: 2, col: 2, level: 0 }, true);
   const route = app.api.reconstructRoute(app.api.dijkstra(), '2,4,0');
   assert.equal(route.length, 4);
-  assert.ok(route.includes('ascend') && route.includes('descend'));
+  assert.ok(route.includes('up') && route.includes('down'));
   app.api.submitCommand('go to E3 level 1');
   await app.flush();
   assert.deepEqual([app.api.state().row, app.api.state().col, app.api.state().level, app.api.state().moveCount], [2, 4, 0, 4]);
   assert.match(app.messages().at(-1), /Reached E3 · L1 in 4 moves/);
+});
+
+test('3D up/down change altitude and forward/backward follow the displayed north-facing arrow', async () => {
+  const app = createSpatialApp([], { row: 3, col: 3, level: 1 });
+  const expectPosition = (row, col, level) => assert.deepEqual(
+    [app.api.state().row, app.api.state().col, app.api.state().level], [row, col, level]);
+  for (const [command, expected] of [
+    ['move up', [3, 3, 2]], ['move down', [3, 3, 1]],
+    ['forward', [2, 3, 1]], ['backward', [3, 3, 1]],
+    ['go forward two cells', [1, 3, 1]], ['go backward two cells', [3, 3, 1]],
+    ['go all the way up', [3, 3, 3]], ['down until a wall', [3, 3, 0]],
+    ['forward all the way', [0, 3, 0]], ['backward all the way', [6, 3, 0]],
+  ]) {
+    app.api.submitCommand(command);
+    await app.flush();
+    expectPosition(...expected);
+  }
+  app.arrows.find((arrow) => arrow.dataset.direction === 'up').listeners.click();
+  await app.flush();
+  expectPosition(6, 3, 1);
+  app.arrows.find((arrow) => arrow.dataset.direction === 'forward').listeners.click();
+  await app.flush();
+  expectPosition(5, 3, 1);
+  const occupiedCell = app.elements.get('#layer-map').children.find((cell) => cell.className.includes('occupied'));
+  assert.equal(occupiedCell.textContent, '↑');
+  assert.match(occupiedCell.attributes['aria-label'], /drone facing north; forward toward row 1/);
+  const models = app.elements.get('#board').children.flatMap((slice) => slice.children)
+    .flatMap((cell) => cell.children).filter((element) => element.className?.includes('drone-model'));
+  assert.equal(models.length, 1);
+  assert.match(models[0].innerHTML, /drone-heading-arrow/);
+  const beforeOrbit = JSON.stringify(app.api.state());
+  app.elements.get('#camera-yaw').value = '135';
+  app.elements.get('#camera-yaw').listeners.input();
+  assert.equal(JSON.stringify(app.api.state()), beforeOrbit, 'camera orbit must not change flight orientation');
+  app.api.submitCommand('forward then up then backward then down');
+  await app.flush();
+  expectPosition(5, 3, 1);
+});
+
+test('map corner commands can climb over or descend under barriers and return to the requested altitude', async () => {
+  for (const level of [0, 3]) {
+    const walls = Array.from({ length: 7 }, (_, row) => `${row},3,${level}`);
+    const app = createSpatialApp(walls, { row: 2, col: 2, level });
+    app.api.setWorld(walls, { row: 2, col: 2, level }, true);
+    for (const phrase of ['move to top right of the map', 'go to the top right edge', 'go to the northeast corner']) {
+      assert.deepEqual(app.parse(phrase), [{ type: 'destination', row: 0, col: 6 }]);
+    }
+    app.api.submitCommand('move to top right of the map');
+    const positions = [];
+    await app.flush((position) => positions.push(position));
+    assert.deepEqual([app.api.state().row, app.api.state().col, app.api.state().level], [0, 6, level]);
+    assert.equal(app.api.state().moveCount, 8);
+    assert.ok(positions.some((position) => level === 0 ? position.level > level : position.level < level));
+    for (const position of positions) assert.ok(!walls.includes(`${position.row},${position.col},${position.level}`));
+    assert.match(app.messages().at(-1), /Reached G1/);
+  }
 });
 
 test('3D shortest paths match an independent six-neighbor breadth-first oracle', () => {
@@ -459,7 +528,7 @@ test('3D controls, layer inspection, and map destinations use independent altitu
   app.api.submitCommand('descend all the way');
   await app.flush();
   assert.equal(app.api.state().level, 0);
-  app.arrows.find((arrow) => arrow.dataset.direction === 'ascend').listeners.click();
+  app.arrows.find((arrow) => arrow.dataset.direction === 'up').listeners.click();
   await app.flush();
   assert.equal(app.api.state().level, 1);
   app.api.submitCommand('go right then go to level 4');
@@ -503,9 +572,9 @@ test('3D spoken altitude commands execute once only after the final recognition 
   app.api.startListening();
   const recognition = app.recognitions[0];
   const result = (text, isFinal) => Object.assign([{ transcript: text }], { isFinal });
-  recognition.onresult({ resultIndex: 0, results: [result('ascend two levels', false)] });
+  recognition.onresult({ resultIndex: 0, results: [result('move up two levels', false)] });
   assert.equal(app.api.state().level, 0);
-  const event = { resultIndex: 0, results: [result('ascend two levels', true)] };
+  const event = { resultIndex: 0, results: [result('move up two levels', true)] };
   recognition.onresult(event);
   recognition.onresult(event);
   await app.flush();

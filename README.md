@@ -14,9 +14,11 @@ Both environments use `drone-app.js` for the existing voice and typed commands, 
 
 ### 3D commands
 
-All existing 2D commands still work. For example, “go to G7”, “go all the way left”, “find the nearest wall”, “count walls”, “what can you see?”, “do a barrel roll”, and “stop”. A destination without a level uses the drone's current altitude; routing may change altitude to avoid walls and return to the requested level.
+The existing destinations, edges, step counts, wall commands, vision reports, sequences, barrel rolls, and stop commands work in 3D. A destination without a level uses the drone's current altitude; routing may change altitude to avoid walls and return to the requested level. For example, “go to the top right of the map” targets G1 at the current level, and the drone can climb over or descend under obstacles along the route.
 
-- “Ascend” / “descend”: move one altitude level.
+- “Up” / “down” (also “ascend” / “descend”): move one altitude level.
+- “Forward” / “backward”: move north toward row 1 / south toward row 7.
+- “Left” / “right”: move west toward column A / east toward column G.
 - “Ascend two levels” / “fly down one level”: move by a level count.
 - “Go to level 4”: route to that altitude above the current horizontal position.
 - “Go to G7 level 3” / “go to D4 L2”: route to a full 3D coordinate.
@@ -24,7 +26,7 @@ All existing 2D commands still work. For example, “go to G7”, “go all the 
 - “Ascend until a wall”: stop before the first wall or altitude boundary.
 - “Go right then go to level 4”: execute a command sequence.
 
-“Up” and “down” preserve their existing north/south meaning unless accompanied by a level count. Use “ascend” and “descend” for unambiguous altitude movement. Levels run from 1 (ground) to 4 (ceiling).
+The 3D drone holds a fixed north-facing heading. A bright arrow on its 3D model and an upward arrow on its layer-map cell mark its nose. The heading label and button labels explain forward/backward; orbiting the camera changes the view while the heading stays north. Compass commands such as “north” and “south” also work. In the separate 2D environment, “up” / “down” keep their original map movement. Levels run from 1 (ground) to 4 (ceiling).
 
 Microphone commands use the existing browser speech-recognition integration. Use Chrome or Edge, allow microphone access, and serve the project on localhost or HTTPS if your browser restricts microphone access for local files. Typed commands and manual controls work without a microphone.
 
