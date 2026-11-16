@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 // Run the real page script with a small DOM and deterministic animation timers.
 // Hooks exist only in this test's VM; the page does not expose test globals.
-function createApp(walls = [], position = { row: 2, col: 2 }) {
+function createApp(walls = [], position = { row: 2, col: 2 }, spatial = false) {
   class Element {
     children = [];
     dataset = {};
@@ -15,6 +15,7 @@ function createApp(walls = [], position = { row: 2, col: 2 }) {
     value = '';
     _text = '';
     classList = { add() {} };
+    style = { setProperty() {} };
     append(...elements) { this.children.push(...elements); }
     replaceChildren(...elements) { this.children = elements; }
     setAttribute(name, value) { this.attributes[name] = value; }
@@ -24,12 +25,13 @@ function createApp(walls = [], position = { row: 2, col: 2 }) {
     get textContent() { return this._text + this.children.map((child) => child.textContent).join(''); }
   }
   const elements = new Map();
-  const arrows = ['up', 'right', 'down', 'left'].map((direction) => {
+  const arrows = ['up', 'right', 'down', 'left', ...(spatial ? ['ascend', 'descend'] : [])].map((direction) => {
     const element = new Element();
     element.dataset.direction = direction;
     return element;
   });
   const document = {
+    body: { dataset: { environment: spatial ? '3d' : '2d' } },
     createElement: () => new Element(),
     querySelector(selector) {
       if (!elements.has(selector)) elements.set(selector, new Element());
@@ -37,6 +39,16 @@ function createApp(walls = [], position = { row: 2, col: 2 }) {
     },
     querySelectorAll: () => arrows,
   };
+  // Use IDs from the real markup, so missing controls fail instead of being
+  // silently invented by the DOM stub.
+  const html = readFileSync(resolve(__dirname, spatial ? '../3d.html' : '../index.html'), 'utf8');
+  const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => `#${match[1]}`));
+  const querySelector = document.querySelector.bind(document);
+  document.querySelector = (selector) => {
+    assert.ok(!selector.startsWith('#') || ids.has(selector), `Missing ${selector} in ${spatial ? '3D' : '2D'} markup`);
+    return querySelector(selector);
+  };
+  assert.match(html, /<script src="drone-app\.js"><\/script>/);
   let timerId = 0;
   const timers = new Map();
   const recognitions = [];
@@ -50,23 +62,22 @@ function createApp(walls = [], position = { row: 2, col: 2 }) {
     setTimeout(callback, delay) { timers.set(++timerId, { callback, delay }); return timerId; },
     clearTimeout(id) { timers.delete(id); },
   };
-  const html = readFileSync(resolve(__dirname, '../index.html'), 'utf8');
-  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/\r\n/g, '\n');
+  const script = readFileSync(resolve(__dirname, '../drone-app.js'), 'utf8').replace(/\r\n/g, '\n');
   const hooks = `globalThis.api = {
-    size: SIZE, parseVoiceCommands, dijkstra, reconstructRoute, countWalls, submitCommand, generateObstacles,
+    size: SIZE, levels: LEVELS, parseVoiceCommands, dijkstra, reconstructRoute, countWalls, submitCommand, generateObstacles,
     terrain() { return [...obstacles]; },
     startListening, stopListening,
     setWorld(walls, position, revealAll = false) {
-      obstacles = new Set(walls); drone = position; moveCount = 0;
+      obstacles = new Set(walls); drone = { level: 0, ...position }; viewLevel = drone.level; moveCount = 0;
       knownObstacles = new Set(); seenCells = new Set(); visibleCells = new Set();
       if (revealAll) {
         knownObstacles = new Set(walls);
-        for (let row = 0; row < SIZE; row++) for (let col = 0; col < SIZE; col++) seenCells.add(row + "," + col);
+        for (let level = 0; level < LEVELS; level++) for (let row = 0; row < SIZE; row++) for (let col = 0; col < SIZE; col++) seenCells.add(key(row, col, level));
       }
       renderBoard();
     },
     knowledge() { return { known: [...knownObstacles], seen: [...seenCells], visible: [...visibleCells] }; },
-    state() { return { ...drone, moveCount, processingCommands, navigating, navigationVersion }; }
+    state() { return { ...drone, viewLevel, moveCount, processingCommands, navigating, navigationVersion }; }
   };`;
   const context = vm.createContext({ document, window, console });
   vm.runInContext(script.replace('        generateObstacles();\n        renderBoard();', hooks), context);
@@ -325,4 +336,194 @@ test('chat renders command text as text, including unrecognized input', () => {
   assert.equal(user.children[1].textContent, '<img src=x onerror=alert(1)>');
   assert.equal(user.children[1].innerHTML, undefined);
   assert.match(app.messages().at(-1), /didn't understand/);
+});
+
+const createSpatialApp = (walls = [], position = { row: 2, col: 2, level: 0 }) => createApp(walls, position, true);
+
+test('3D retains the entire legacy command vocabulary and adds explicit altitude commands', () => {
+  const flat = createApp();
+  const spatial = createSpatialApp();
+  for (const phrase of [
+    'go left', 'move three cells right', 'go all the way north', 'right until a wall',
+    'go to G7', 'go to the southwest corner', 'go to the center',
+    'row three column two', 'take the second spot on top', 'go to the seventh spot on the bottom',
+    'find the nearest wall', 'count walls', 'what can you see', 'do a barrel roll', 'stop',
+    'go left then do a barrel roll', 'hello drone', "don't go right", 'move up and right', 'go to H8',
+  ]) assert.deepEqual(spatial.parse(phrase), flat.parse(phrase), phrase);
+  for (const phrase of ['ascend', 'climb', 'go higher']) {
+    assert.deepEqual(spatial.parse(phrase), [{ type: 'direction', direction: 'ascend', steps: 1 }]);
+  }
+  assert.deepEqual(spatial.parse('descend two levels'), [{ type: 'direction', direction: 'descend', steps: 2 }]);
+  assert.deepEqual(spatial.parse('fly up two levels'), [{ type: 'direction', direction: 'ascend', steps: 2 }]);
+  assert.deepEqual(spatial.parse('go to G7 level three'), [{ type: 'destination', row: 6, col: 6, level: 2 }]);
+  assert.deepEqual(spatial.parse('go to row three column two at level 4'), [{ type: 'destination', row: 2, col: 1, level: 3 }]);
+  assert.deepEqual(spatial.parse('go to D4 L2'), [{ type: 'destination', row: 3, col: 3, level: 1 }]);
+  assert.deepEqual(spatial.parse('go to level 4'), [{ type: 'altitude', level: 3 }]);
+  assert.deepEqual(spatial.parse('ascend one level'), [{ type: 'direction', direction: 'ascend', steps: 1 }]);
+  assert.deepEqual(spatial.parse('go to the ceiling'), [{ type: 'edge', direction: 'ascend' }]);
+  assert.deepEqual(spatial.parse('go to the ground'), [{ type: 'edge', direction: 'descend' }]);
+  assert.deepEqual(spatial.parse('ascend then go right then descend').map((command) => command.direction), ['ascend', 'right', 'descend']);
+  for (const phrase of ['go to G7 level 0', 'go to G7 level 5', 'go to H8 level 3', 'ascend 99 levels', 'go to level -1', 'go to G7 level 2 level 3', 'go right level 3']) {
+    assert.deepEqual(spatial.parse(phrase), [], phrase);
+  }
+});
+
+test('3D Dijkstra takes a shorter vertical detour around a wall spanning a layer', async () => {
+  const walls = Array.from({ length: 7 }, (_, row) => `${row},3,0`);
+  const app = createSpatialApp(walls);
+  app.api.setWorld(walls, { row: 2, col: 2, level: 0 }, true);
+  const route = app.api.reconstructRoute(app.api.dijkstra(), '2,4,0');
+  assert.equal(route.length, 4);
+  assert.ok(route.includes('ascend') && route.includes('descend'));
+  app.api.submitCommand('go to E3 level 1');
+  await app.flush();
+  assert.deepEqual([app.api.state().row, app.api.state().col, app.api.state().level, app.api.state().moveCount], [2, 4, 0, 4]);
+  assert.match(app.messages().at(-1), /Reached E3 · L1 in 4 moves/);
+});
+
+test('3D shortest paths match an independent six-neighbor breadth-first oracle', () => {
+  let seed = 91;
+  const random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let trial = 0; trial < 20; trial++) {
+    const walls = new Set();
+    for (let level = 0; level < 4; level++) for (let row = 0; row < 7; row++) for (let col = 0; col < 7; col++) {
+      if (`${row},${col},${level}` !== '2,2,0' && random() < .3) walls.add(`${row},${col},${level}`);
+    }
+    const expected = new Map([['2,2,0', 0]]);
+    const queue = [[2, 2, 0]];
+    for (let index = 0; index < queue.length; index++) {
+      const [r, c, l] = queue[index];
+      for (const [row, col, level] of [[r-1,c,l], [r+1,c,l], [r,c-1,l], [r,c+1,l], [r,c,l-1], [r,c,l+1]]) {
+        const location = `${row},${col},${level}`;
+        if (row < 0 || row >= 7 || col < 0 || col >= 7 || level < 0 || level >= 4 || walls.has(location) || expected.has(location)) continue;
+        expected.set(location, expected.get(`${r},${c},${l}`) + 1);
+        queue.push([row, col, level]);
+      }
+    }
+    const app = createSpatialApp([...walls]);
+    app.api.setWorld([...walls], { row: 2, col: 2, level: 0 }, true);
+    const search = app.api.dijkstra();
+    assert.equal(search.distances.size, expected.size);
+    for (const [location, distance] of expected) {
+      assert.equal(search.distances.get(location), distance);
+      assert.equal(app.api.reconstructRoute(search, location).length, distance);
+    }
+  }
+});
+
+test('3D vision occludes vertically, remembers walls, and replans when hidden walls appear', async () => {
+  const walls = ['2,2,1', '2,2,2'];
+  const app = createSpatialApp(walls);
+  assert.ok(app.api.knowledge().visible.includes('2,2,1'));
+  assert.ok(!app.api.knowledge().seen.includes('2,2,2'));
+  assert.ok(app.api.dijkstra().distances.has('2,2,2'), 'hidden obstacles must not leak to planning');
+  app.api.submitCommand('go to C3 level 4');
+  await app.flush();
+  assert.equal(app.api.state().level, 3);
+  assert.equal(app.api.state().row, 2);
+  assert.equal(app.api.state().col, 2);
+  assert.equal(app.api.state().moveCount, 5);
+  assert.ok(app.api.knowledge().known.includes('2,2,2'));
+  assert.ok(app.api.knowledge().known.includes('2,2,1'));
+  app.api.submitCommand('what can you see');
+  await app.flush();
+  assert.match(app.messages().at(-1), /remember .* unknown/);
+});
+
+test('3D controls, layer inspection, and map destinations use independent altitude state', async () => {
+  const flat = createApp();
+  const app = createSpatialApp();
+  app.api.submitCommand('ascend two levels');
+  await app.flush();
+  assert.equal(app.api.state().level, 2);
+  assert.equal(app.api.state().viewLevel, 2);
+  assert.equal(flat.api.state().moveCount, 0);
+  assert.equal(flat.api.state().level, 0);
+  const knowledge = JSON.stringify(app.api.knowledge());
+  app.elements.get('#view-level').listeners.change({ target: { value: '3' } });
+  assert.equal(app.api.state().level, 2);
+  assert.equal(app.api.state().viewLevel, 3);
+  assert.equal(JSON.stringify(app.api.knowledge()), knowledge);
+  const map = app.elements.get('#layer-map');
+  assert.equal(map.children.length, 49);
+  map.children[0].listeners.click();
+  await app.flush();
+  assert.deepEqual([app.api.state().row, app.api.state().col, app.api.state().level], [0, 0, 3]);
+  app.api.submitCommand('go to D4');
+  await app.flush();
+  assert.equal(app.api.state().level, 3, 'legacy destinations preserve altitude');
+  app.api.submitCommand('ascend');
+  await app.flush();
+  assert.equal(app.api.state().level, 3);
+  assert.match(app.messages().at(-1), /grid edge/);
+  app.api.submitCommand('descend all the way');
+  await app.flush();
+  assert.equal(app.api.state().level, 0);
+  app.arrows.find((arrow) => arrow.dataset.direction === 'ascend').listeners.click();
+  await app.flush();
+  assert.equal(app.api.state().level, 1);
+  app.api.submitCommand('go right then go to level 4');
+  await app.flush();
+  assert.deepEqual([app.api.state().row, app.api.state().col, app.api.state().level], [3, 4, 3]);
+});
+
+test('3D wall grouping and nearest-wall routing include vertical neighbors', async () => {
+  const app = createSpatialApp(['2,2,1', '2,2,2', '6,6,3']);
+  app.api.setWorld(['2,2,1', '2,2,2', '6,6,3'], { row: 2, col: 2, level: 0 }, true);
+  assert.equal(app.api.countWalls(), 2);
+  app.api.submitCommand('find the nearest wall then count walls');
+  await app.flush();
+  assert.equal(app.api.state().moveCount, 0, 'already adjacent to wall above');
+  assert.match(app.messages().at(-1), /Already at the nearest wall.*2 connected walls/);
+  app.api.submitCommand('ascend until a wall then do a barrel roll');
+  await app.flush();
+  assert.equal(app.api.state().level, 0);
+  assert.match(app.messages().at(-1), /before a wall.*Barrel roll complete/);
+});
+
+test('3D stop and regeneration cancel vertical flight and pending commands', async () => {
+  const app = createSpatialApp();
+  app.api.submitCommand('go to level 4');
+  app.api.submitCommand('do a barrel roll');
+  const stoppedAt = app.api.state().level;
+  app.api.submitCommand('stop');
+  await app.flush();
+  assert.equal(app.api.state().level, stoppedAt);
+  assert.equal(app.messages().filter((message) => message.includes('Cancelled by stop')).length, 2);
+  app.api.submitCommand('do a barrel roll');
+  app.api.submitCommand('go to G7 level 4');
+  app.elements.get('#reset-button').listeners.click();
+  await app.flush();
+  assert.deepEqual([app.api.state().row, app.api.state().col, app.api.state().level, app.api.state().moveCount], [3, 3, 0, 0]);
+  assert.match(app.messages().at(-1), /New grid ready.*D4 · L1/);
+});
+
+test('3D spoken altitude commands execute once only after the final recognition result', async () => {
+  const app = createSpatialApp();
+  app.api.startListening();
+  const recognition = app.recognitions[0];
+  const result = (text, isFinal) => Object.assign([{ transcript: text }], { isFinal });
+  recognition.onresult({ resultIndex: 0, results: [result('ascend two levels', false)] });
+  assert.equal(app.api.state().level, 0);
+  const event = { resultIndex: 0, results: [result('ascend two levels', true)] };
+  recognition.onresult(event);
+  recognition.onresult(event);
+  await app.flush();
+  assert.equal(app.api.state().level, 2);
+  assert.equal(app.api.state().moveCount, 2);
+  assert.equal(app.messages().filter((message) => message.includes('You · voice')).length, 1);
+  app.api.stopListening();
+});
+
+test('3D terrain keeps all open cells reachable across varied generations', () => {
+  const app = createSpatialApp();
+  for (let generation = 0; generation < 12; generation++) {
+    app.api.generateObstacles();
+    const walls = app.api.terrain();
+    assert.ok(walls.length >= 35 && walls.length <= 44);
+    assert.ok(!walls.includes('2,2,0'));
+    assert.ok(walls.some((location) => !location.endsWith(',0')));
+    app.api.setWorld(walls, { row: 2, col: 2, level: 0 }, true);
+    assert.equal(app.api.dijkstra().distances.size, 196 - walls.length);
+  }
 });

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101827">
+    <title>Drone Airspace · 3D environment</title>
+    <link rel="stylesheet" href="3d.css">
+  </head>
+  <body data-environment="3d">
+    <main class="app">
+      <header class="topbar">
+        <a class="brand" href="3d.html">✥ <span>DRONE / AIRSPACE</span></a>
+        <nav aria-label="Environment">
+          <a href="index.html">2D environment</a>
+          <a href="3d.html" aria-current="page">3D environment</a>
+        </nav>
+      </header>
+      <div class="intro">
+        <div><p class="eyebrow">Spatial flight simulator</p><h1>A new dimension of flight.</h1>
+        <p>Explore, observe, and navigate a separate 7 × 7 × 4 airspace.</p></div>
+        <span class="session-tag">Independent 3D session</span>
+      </div>
+      <div class="workspace">
+        <section class="scene-card" aria-labelledby="board-title">
+          <div class="card-heading"><div><h2 id="board-title">Live airspace</h2><p>Blue trails trace the route the drone currently knows.</p></div><span class="live-badge">3D</span></div>
+          <div class="scene-viewport" id="scene" style="--yaw:-35deg;--tilt:58deg;--zoom:.85">
+            <div class="scene-hud"><span>ALTITUDE <strong id="altitude">L1 / 4</strong></span><span>N ↑ · E → <small>before camera rotation</small></span></div>
+            <div class="scene-center"><div id="board" class="spatial-board" aria-hidden="true"></div></div>
+            <div class="scene-caption">4 altitude layers · 196 flight cells</div>
+          </div>
+          <div class="camera-controls" aria-label="Camera controls">
+            <label>Orbit <input id="camera-yaw" type="range" min="-180" max="180" value="-35"></label>
+            <label>Tilt <input id="camera-tilt" type="range" min="25" max="75" value="58"></label>
+            <label>Zoom <input id="camera-zoom" type="range" min="45" max="115" value="85"></label>
+            <button id="camera-reset" type="button">Reset view</button>
+          </div>
+          <div class="board-footer"><span>Position <strong id="position">D4 · L1</strong></span><span>Moves <strong id="move-count">0</strong></span></div>
+          <div class="vision-panel" aria-label="Drone vision">
+            <p id="vision-status" aria-live="polite"></p>
+            <div class="vision-legend"><span><i class="swatch visible"></i>Visible</span><span><i class="swatch remembered"></i>Remembered</span><span><i class="swatch unknown"></i>Unknown</span><span><i class="swatch wall"></i>Known wall</span><span><i class="swatch route"></i>Planned route</span></div>
+          </div>
+        </section>
+        <aside class="sidebar">
+          <section class="panel" aria-labelledby="layer-title">
+            <div class="panel-heading"><h2 id="layer-title">Level 1 · drone altitude</h2><button id="follow-drone" type="button">Find drone</button></div>
+            <div class="layer-picker"><label for="view-level">Inspect altitude</label><select id="view-level"><option value="0">Level 1 · ground</option><option value="1">Level 2</option><option value="2">Level 3</option><option value="3">Level 4 · ceiling</option></select></div>
+            <div class="map-columns" aria-hidden="true"><span>A</span><span>B</span><span>C</span><span>D</span><span>E</span><span>F</span><span>G</span></div>
+            <div class="layer-map-wrap"><div class="map-rows" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span></div><div id="layer-map" class="layer-map" role="group" aria-label="Inspected altitude map; select a cell to route there"></div></div>
+            <p class="hint">Select a cell to fly there. The map follows the drone as it moves. Inspecting a layer does not reveal hidden cells.</p>
+          </section>
+          <section class="panel controls" aria-label="Flight controls">
+            <h2>Flight controls</h2>
+            <div class="manual-controls">
+              <div class="dpad" aria-label="Horizontal movement">
+                <button class="arrow" type="button" data-direction="up" aria-label="Move north" title="North (up)">↑</button>
+                <button class="arrow" type="button" data-direction="left" aria-label="Move west" title="West (left)">←</button>
+                <button class="arrow" type="button" data-direction="down" aria-label="Move south" title="South (down)">↓</button>
+                <button class="arrow" type="button" data-direction="right" aria-label="Move east" title="East (right)">→</button>
+              </div>
+              <div class="altitude-controls"><button class="arrow" type="button" data-direction="ascend">↥ Ascend</button><button class="arrow" type="button" data-direction="descend">↧ Descend</button></div>
+            </div>
+            <div class="voice-controls"><button class="voice-button" id="listen-button" type="button" aria-label="Start listening" aria-pressed="false"><span aria-hidden="true">◉</span> <span id="listen-label">Start listening</span></button><div class="status" id="status" data-state="idle" role="status" aria-live="polite"><i></i><span id="status-message">Off</span></div></div>
+            <button class="reset-button" id="reset-button" type="button">↻ Regenerate 3D airspace</button>
+            <p class="hint">“Up” and “down” still mean north and south. Use “ascend” and “descend” for altitude.</p>
+          </section>
+        </aside>
+        <section class="panel history" aria-labelledby="chat-title">
+          <div class="panel-heading"><h2 id="chat-title">Command chat</h2><span class="hint">Voice + text · same flight intelligence</span></div>
+          <ol class="history-list" id="history-list" role="log" aria-label="Commands and drone replies" aria-live="polite" aria-relevant="additions text"></ol>
+          <p class="voice-preview" id="voice-preview" aria-live="polite"></p>
+          <form class="command-form" id="command-form">
+            <label class="visually-hidden" for="command-input">Type a drone command</label>
+            <input id="command-input" name="command" placeholder="Try “go to G7 level 3”…" autocomplete="off" maxlength="500" required aria-describedby="command-help">
+            <button type="submit">Send ↗</button><button class="stop-button" id="stop-button" type="button">Stop</button>
+          </form>
+          <p class="command-help" id="command-help">All 2D commands work here: destinations, edges, step counts, wall finding and counting, vision reports, sequences, stop, and barrel rolls. Add “ascend two levels”, “go to level 4”, or “go to G7 level 3”. Destinations without a level use the current altitude. Routing can detour across all four levels, using only observed walls.</p>
+        </section>
+      </div>
+    </main>
+    <script src="drone-app.js"></script>
+  </body>
+</html>
